@@ -1,0 +1,1725 @@
+import 'dart:async';
+import 'dart:io';
+import 'package:bhad_foods/Log_In.dart';
+import 'package:flutter/material.dart';
+import 'package:geocoding/geocoding.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:permission_handler/permission_handler.dart';
+
+class _Palette {
+  static const darkHeaderTop = Color(0xFF381C00);
+  static const darkHeaderBottom = Color(0xFF1E0E00);
+  static const primaryBrown = Color(0xFF4E2613);
+  static const goldAccent = Color(0xFFE2BA55);
+  static const goldLight = Color(0xFFF7D57F);
+  static const bgWarm = Color(0xFFFBF6EE);
+  static const cardBg = Color(0xFFFFFDF5);
+  static const cardHeaderBg = Color(0xFFF4EBD9);
+  static const border = Color(0xFFE8D3A7);
+  static const inkDark = Color(0xFF2E1A05);
+  static const whatsappGreen = Color(0xFF25D366);
+  static const darkModalBg = Color(0xFF1A2130);
+  static const darkInputBg = Color(0xFF242F42);
+}
+
+// Model for reporting chain live positions with Proper Physical Address
+class HierarchyUserLocation {
+  final String roleKey;
+  final String roleTitle;
+  final String name;
+  final String userId;
+  final Color themeColor;
+  String addressLocation;
+
+  HierarchyUserLocation({
+    required this.roleKey,
+    required this.roleTitle,
+    required this.name,
+    required this.userId,
+    required this.themeColor,
+    required this.addressLocation,
+  });
+}
+
+class DashboardScreen extends StatefulWidget {
+  final String loggedInRole; // 'Salesman', 'SO', 'ASM', 'RSM', 'ZSM', 'SalesHead'
+  final String loggedInUserId;
+  final String loggedInUserName;
+  final String email;
+
+  const DashboardScreen({
+    super.key,
+    this.loggedInRole = 'ZSM',
+    this.loggedInUserId = 'BHFZSM-01',
+    this.loggedInUserName = 'Suresh Kumar',
+    this.email = "abc@gmail.com"
+  });
+
+  @override
+  State<DashboardScreen> createState() => _DashboardScreenState();
+}
+
+class _DashboardScreenState extends State<DashboardScreen> {
+  late String userRole;
+  late String userId;
+  late String userName;
+
+  bool isCheckedIn = false;
+  late Stream<DateTime> _clockStream;
+  StreamSubscription<Position>? _positionStreamSub;
+  String? currentLiveAddress = "Fetching live GPS location...";
+
+  // Image Picker & Face Detector Setup
+  final ImagePicker _picker = ImagePicker();
+  final FaceDetector _faceDetector = FaceDetector(
+    options: FaceDetectorOptions(
+      performanceMode: FaceDetectorMode.fast,
+      enableLandmarks: true,
+      minFaceSize: 0.1,
+    ),
+  );
+
+  // Form Controllers
+  final _taskFormKey = GlobalKey<FormState>();
+  final _firmNameController = TextEditingController();
+  final _mobileController = TextEditingController();
+  final _pinCodeController = TextEditingController();
+  final _qtyController = TextEditingController(text: '1');
+
+  // Dynamic Product Catalog
+  final Map<String, List<Map<String, dynamic>>> productCatalog = {
+    'Khakhra': [
+      {'name': 'Plain Khakhra', 'price': 70.00},
+      {'name': 'Masala Khakhra', 'price': 80.00},
+      {'name': 'Methi Khakhra', 'price': 85.00},
+    ],
+  };
+
+  late String selectedCategory;
+  late String selectedProductName;
+  late double selectedProductPrice;
+
+  // Leave Management State
+  final List<String> leaveTypes = [
+    'Casual Leave',
+    'Maternity Leave',
+    'Paternity Leave',
+    'Half Day Leave',
+    'Sick Leave'
+  ];
+  String selectedLeaveType = 'Casual Leave';
+  final TextEditingController _leaveReasonController = TextEditingController();
+  DateTimeRange? _selectedLeaveDateRange;
+
+  final List<Map<String, String>> leaveHistory = [
+    {
+      'type': 'Casual Leave',
+      'dates': '12 Aug - 13 Aug 2026',
+      'reason': 'Personal Work',
+      'status': 'Approved'
+    },
+    {
+      'type': 'Sick Leave',
+      'dates': '02 Jul - 02 Jul 2026',
+      'reason': 'Fever & Rest',
+      'status': 'Approved'
+    },
+  ];
+
+  // Daily Log History
+  final List<Map<String, dynamic>> dailyTaskHistory = [
+    {
+      'firm': 'Shree Ji Decorators',
+      'mobile': '9876543210',
+      'pin': '364001',
+      'category': 'Khakhra',
+      'product': 'Plain Khakhra',
+      'price': 70.00,
+      'qty': 10,
+      'total': 700.00,
+      'time': '10:30 AM',
+      'status': 'Order Taken',
+    },
+  ];
+
+  // Hierarchy Chain Data with Proper Physical Addresses
+  final List<HierarchyUserLocation> hierarchyData = [
+    HierarchyUserLocation(
+      roleKey: 'Salesman',
+      roleTitle: 'Salesman',
+      name: 'Rahul Sharma',
+      userId: 'BHFSM-01',
+      themeColor: Colors.green,
+      addressLocation: 'Fetching live position...',
+    ),
+    HierarchyUserLocation(
+      roleKey: 'SO',
+      roleTitle: 'Sales Officer (SO)',
+      name: 'Amit Shah',
+      userId: 'BHFSO-01',
+      themeColor: Colors.blue,
+      addressLocation: 'Nari Chawkdi, Ring Road, Bhavnagar',
+    ),
+    HierarchyUserLocation(
+      roleKey: 'ASM',
+      roleTitle: 'Area Sales Manager (ASM)',
+      name: 'Rajesh Patel',
+      userId: 'BHFASM-01',
+      themeColor: Colors.deepOrange,
+      addressLocation: 'Waghawadi Road, Near Jewel Circle, Bhavnagar',
+    ),
+    HierarchyUserLocation(
+      roleKey: 'RSM',
+      roleTitle: 'Regional Sales Manager (RSM)',
+      name: 'Vikas Mehta',
+      userId: 'BHFRSM-01',
+      themeColor: Colors.purple,
+      addressLocation: 'Kalvibid Circle, Opp. ISKCON Temple, Bhavnagar',
+    ),
+    HierarchyUserLocation(
+      roleKey: 'ZSM',
+      roleTitle: 'Zone Sales Manager (ZSM)',
+      name: 'Suresh Kumar',
+      userId: 'BHFZSM-01',
+      themeColor: Colors.brown,
+      addressLocation: 'Ghogha Circle, Subhashnagar, Bhavnagar',
+    ),
+    HierarchyUserLocation(
+      roleKey: 'SalesHead',
+      roleTitle: 'Sales Head',
+      name: 'Vikramaditya Roy',
+      userId: 'BHFSH-01',
+      themeColor: Colors.red,
+      addressLocation: 'Corporate HQ, Crest – 1, Waghawadi Road, Bhavnagar',
+    ),
+  ];
+
+  // Hierarchy Role Levels for Filter Logic
+  final List<String> roleHierarchyOrder = [
+    'Salesman',
+    'SO',
+    'ASM',
+    'RSM',
+    'ZSM',
+    'SalesHead'
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    userRole = widget.loggedInRole;
+    userId = widget.loggedInUserId;
+    userName = widget.loggedInUserName;
+
+    _clockStream = Stream.periodic(const Duration(seconds: 1), (_) => DateTime.now());
+    selectedCategory = productCatalog.keys.first;
+    selectedProductName = productCatalog[selectedCategory]!.first['name'] as String;
+    selectedProductPrice = (productCatalog[selectedCategory]!.first['price'] as num).toDouble();
+
+    _initLiveGpsTracking();
+  }
+
+  @override
+  void dispose() {
+    _positionStreamSub?.cancel();
+    _faceDetector.close();
+    _firmNameController.dispose();
+    _mobileController.dispose();
+    _pinCodeController.dispose();
+    _qtyController.dispose();
+    _leaveReasonController.dispose();
+    super.dispose();
+  }
+
+  // Live Location & Reverse Geocoding Setup
+  Future<void> _initLiveGpsTracking() async {
+    // 1. Make sure the device's GPS/location service is actually switched on.
+    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      if (!mounted) return;
+      setState(() => currentLiveAddress = "Location services are OFF. Please enable GPS.");
+      _showPermissionSnackBar(
+        "Location services are turned off. Please enable GPS to fetch your live location.",
+        settingsLabel: "ENABLE",
+        onSettingsPressed: () => Geolocator.openLocationSettings(),
+      );
+      return;
+    }
+
+    // 2. Check & request permission (permission_handler keeps this in sync
+    // across Android/iOS and lets us detect "permanently denied" reliably).
+    PermissionStatus permStatus = await Permission.locationWhenInUse.status;
+    if (permStatus.isDenied) {
+      permStatus = await Permission.locationWhenInUse.request();
+    }
+
+    if (permStatus.isPermanentlyDenied || permStatus.isRestricted) {
+      if (!mounted) return;
+      setState(() => currentLiveAddress = "Location permission denied. Enable it in app settings.");
+      _showPermissionSnackBar(
+        "Location permission is permanently denied. Please enable it from app settings to punch in with live location.",
+        settingsLabel: "SETTINGS",
+        onSettingsPressed: () => openAppSettings(),
+      );
+      return;
+    }
+
+    if (!permStatus.isGranted) {
+      if (!mounted) return;
+      setState(() => currentLiveAddress = "Location permission denied.");
+      return;
+    }
+
+    // 3. Grab an immediate one-time GPS fix so the UI doesn't stay stuck on
+    // "Fetching live GPS location..." while it waits for the stream (the
+    // stream only emits again once the device physically moves).
+    try {
+      final Position initialPosition = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+        timeLimit: const Duration(seconds: 15),
+      );
+      await _updateAddressFromPosition(initialPosition);
+    } catch (e) {
+      if (mounted) {
+        setState(() => currentLiveAddress = "Unable to fetch current location. Retrying in background...");
+      }
+    }
+
+    // 4. Start listening for continuous live updates.
+    await _positionStreamSub?.cancel();
+    _positionStreamSub = Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 10,
+      ),
+    ).listen(
+          (Position position) => _updateAddressFromPosition(position),
+      onError: (e) {
+        if (mounted) {
+          setState(() => currentLiveAddress = "Live location error: $e");
+        }
+      },
+    );
+  }
+
+  // Converts a raw GPS fix into a readable address, and pushes it both to
+  // the header's live-address label and to the logged-in user's own entry
+  // in the hierarchy list.
+  Future<void> _updateAddressFromPosition(Position position) async {
+    String resolvedAddress;
+    try {
+      List<Placemark> placemarks = await placemarkFromCoordinates(
+        position.latitude,
+        position.longitude,
+      );
+
+      if (placemarks.isNotEmpty) {
+        Placemark place = placemarks.first;
+        final parts = [place.street, place.subLocality, place.locality, place.postalCode]
+            .where((p) => p != null && p.trim().isNotEmpty)
+            .toList();
+        resolvedAddress = parts.isNotEmpty
+            ? parts.join(', ')
+            : "Lat: ${position.latitude.toStringAsFixed(4)}, Long: ${position.longitude.toStringAsFixed(4)}";
+      } else {
+        resolvedAddress = "Lat: ${position.latitude.toStringAsFixed(4)}, Long: ${position.longitude.toStringAsFixed(4)}";
+      }
+    } catch (e) {
+      resolvedAddress = "Lat: ${position.latitude.toStringAsFixed(4)}, Long: ${position.longitude.toStringAsFixed(4)}";
+    }
+
+    if (!mounted) return;
+    setState(() {
+      currentLiveAddress = resolvedAddress;
+      for (var item in hierarchyData) {
+        if (item.roleKey == userRole) {
+          item.addressLocation = resolvedAddress;
+        }
+      }
+    });
+  }
+
+  void _showPermissionSnackBar(String message, {required String settingsLabel, required VoidCallback onSettingsPressed}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor: Colors.red,
+        content: Text(message),
+        duration: const Duration(seconds: 6),
+        action: SnackBarAction(
+          label: settingsLabel,
+          textColor: Colors.white,
+          onPressed: onSettingsPressed,
+        ),
+      ),
+    );
+  }
+
+  double get calculatedTotal {
+    int qty = int.tryParse(_qtyController.text) ?? 0;
+    return selectedProductPrice * qty;
+  }
+
+  List<HierarchyUserLocation> getVisibleHierarchy() {
+    int userLevelIndex = roleHierarchyOrder.indexOf(userRole);
+    if (userLevelIndex == -1) userLevelIndex = roleHierarchyOrder.length - 1;
+
+    return hierarchyData.where((item) {
+      int itemLevelIndex = roleHierarchyOrder.indexOf(item.roleKey);
+      return itemLevelIndex <= userLevelIndex;
+    }).toList();
+  }
+
+  // Camera Selfie Punch-In/Out Execution
+  Future<void> _triggerSelfiePunch() async {
+    try {
+      // 1. Explicitly check & request camera permission first. Without this,
+      // the camera can fail to open (or open a blank/black preview) with no
+      // explanation if permission was previously denied.
+      PermissionStatus cameraStatus = await Permission.camera.status;
+      if (cameraStatus.isDenied) {
+        cameraStatus = await Permission.camera.request();
+      }
+
+      if (cameraStatus.isPermanentlyDenied || cameraStatus.isRestricted) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: Colors.red,
+            content: const Text("Camera permission is permanently denied. Please enable it from app settings."),
+            duration: const Duration(seconds: 6),
+            action: SnackBarAction(
+              label: "SETTINGS",
+              textColor: Colors.white,
+              onPressed: openAppSettings,
+            ),
+          ),
+        );
+        return;
+      }
+
+      if (!cameraStatus.isGranted) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(backgroundColor: Colors.red, content: Text("Camera permission is required to punch in.")),
+        );
+        return;
+      }
+
+      // 2. Capture the selfie. Cap the resolution so large camera images
+      // don't slow down / fail face detection on lower-end devices.
+      final XFile? photo = await _picker.pickImage(
+        source: ImageSource.camera,
+        preferredCameraDevice: CameraDevice.front,
+        imageQuality: 85,
+        maxWidth: 1280,
+        maxHeight: 1280,
+      );
+
+      if (photo == null) {
+        // User backed out of the camera without capturing a photo.
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Punch-in cancelled: no photo was captured.")),
+        );
+        return;
+      }
+
+      File imageFile = File(photo.path);
+      if (!await imageFile.exists()) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            backgroundColor: Colors.red,
+            content: Text("Captured photo could not be read. Please try again."),
+          ),
+        );
+        return;
+      }
+
+      if (!mounted) return;
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => const Center(
+          child: CircularProgressIndicator(color: _Palette.goldAccent),
+        ),
+      );
+
+      final inputImage = InputImage.fromFile(imageFile);
+      final List<Face> faces = await _faceDetector.processImage(inputImage);
+
+      if (mounted) Navigator.pop(context);
+
+      if (faces.isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            backgroundColor: Colors.red,
+            content: Text("Face detection failed! Ensure adequate lighting and align face inside camera."),
+          ),
+        );
+        return;
+      }
+
+      if (!mounted) return;
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: _Palette.cardBg,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: const Row(
+            children: [
+              Icon(Icons.verified_user, color: Colors.green),
+              SizedBox(width: 8),
+              Text("Face Verified!", style: TextStyle(color: _Palette.inkDark, fontWeight: FontWeight.bold)),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(16),
+                child: Image.file(imageFile, height: 180, width: double.infinity, fit: BoxFit.cover),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                "Face detected successfully.\nLocation:\n$currentLiveAddress",
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 12, color: _Palette.inkDark, fontWeight: FontWeight.w600),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text("Cancel", style: TextStyle(color: Colors.grey)),
+            ),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(backgroundColor: _Palette.primaryBrown),
+              icon: const Icon(Icons.check_circle, color: _Palette.goldLight, size: 18),
+              label: Text(
+                isCheckedIn ? "Confirm Punch Out" : "Confirm Punch In",
+                style: const TextStyle(color: _Palette.goldLight),
+              ),
+              onPressed: () {
+                Navigator.pop(ctx);
+                setState(() => isCheckedIn = !isCheckedIn);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    backgroundColor: _Palette.primaryBrown,
+                    content: Text(
+                      isCheckedIn
+                          ? "Punch In recorded with face verification & live address!"
+                          : "Punch Out successful!",
+                    ),
+                  ),
+                );
+              },
+            )
+          ],
+        ),
+      );
+    } catch (e) {
+      if (mounted && Navigator.canPop(context)) Navigator.pop(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Error processing selfie: $e")),
+      );
+    }
+  }
+
+  void viewProductCatalog() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        height: MediaQuery.of(context).size.height * 0.75,
+        decoration: const BoxDecoration(
+          color: _Palette.bgWarm,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(color: Colors.grey.shade400, borderRadius: BorderRadius.circular(2)),
+              ),
+            ),
+            const SizedBox(height: 16),
+            const Row(
+              children: [
+                Icon(Icons.menu_book, color: _Palette.primaryBrown, size: 24),
+                SizedBox(width: 10),
+                Text(
+                  "Product Catalog & Pricing",
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _Palette.inkDark),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            const Divider(),
+            Expanded(
+              child: ListView.builder(
+                itemCount: productCatalog.keys.length,
+                itemBuilder: (context, index) {
+                  String category = productCatalog.keys.elementAt(index);
+                  List<Map<String, dynamic>> items = productCatalog[category]!;
+
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 16),
+                    decoration: BoxDecoration(
+                      color: _Palette.cardBg,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: _Palette.border),
+                    ),
+                    child: ExpansionTile(
+                      initiallyExpanded: index == 0,
+                      iconColor: _Palette.primaryBrown,
+                      title: Text(
+                        category,
+                        style: const TextStyle(fontWeight: FontWeight.bold, color: _Palette.inkDark, fontSize: 15),
+                      ),
+                      children: items.map((item) {
+                        return ListTile(
+                          dense: true,
+                          leading: const Icon(Icons.inventory_2_outlined, color: _Palette.primaryBrown, size: 18),
+                          title: Text(item['name'], style: const TextStyle(fontWeight: FontWeight.w600, color: _Palette.inkDark)),
+                          trailing: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: _Palette.cardHeaderBg,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              "₹${item['price']}",
+                              style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.green),
+                            ),
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHierarchyLocationCard() {
+    final visibleList = getVisibleHierarchy();
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: _Palette.cardBg,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: _Palette.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: const BoxDecoration(
+                  color: Color(0xFFFDE8E8),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.my_location, color: Colors.redAccent, size: 20),
+              ),
+              const SizedBox(width: 10),
+              const Text(
+                "Hierarchy Live Address Location",
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: _Palette.inkDark),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            "Showing address location for role management: $userRole",
+            style: const TextStyle(fontSize: 12, color: Colors.grey),
+          ),
+          const SizedBox(height: 16),
+          ListView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: visibleList.length,
+            itemBuilder: (context, index) {
+              final item = visibleList[index];
+              final isLast = index == visibleList.length - 1;
+
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: CircleAvatar(
+                          radius: 12,
+                          backgroundColor: item.themeColor,
+                          child: const Icon(Icons.location_on, size: 14, color: Colors.white),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text.rich(
+                              TextSpan(
+                                children: [
+                                  TextSpan(
+                                    text: "${item.roleTitle}: ",
+                                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: _Palette.inkDark),
+                                  ),
+                                  TextSpan(
+                                    text: item.name,
+                                    style: TextStyle(fontSize: 13, color: item.themeColor, fontWeight: FontWeight.bold),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              item.addressLocation,
+                              style: const TextStyle(fontSize: 11, color: _Palette.inkDark, fontWeight: FontWeight.w500),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: Colors.green.shade50,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.green.shade400),
+                        ),
+                        child: const Text(
+                          "Live",
+                          style: TextStyle(fontSize: 10, color: Colors.green, fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (!isLast)
+                    Container(
+                      margin: const EdgeInsets.only(left: 11, top: 4, bottom: 4),
+                      height: 20,
+                      width: 2,
+                      color: item.themeColor.withOpacity(0.5),
+                    ),
+                ],
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showPersonalDetailsModal() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        decoration: const BoxDecoration(
+          color: _Palette.bgWarm,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        padding: const EdgeInsets.all(20),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(color: Colors.grey.shade400, borderRadius: BorderRadius.circular(2)),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  const CircleAvatar(
+                    radius: 32,
+                    backgroundColor: _Palette.goldLight,
+                    child: Icon(Icons.person, size: 42, color: _Palette.primaryBrown),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(userName, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: _Palette.inkDark)),
+                        const SizedBox(height: 2),
+                        Text("Role: $userRole ($userId)", style: const TextStyle(fontSize: 13, color: _Palette.primaryBrown, fontWeight: FontWeight.bold)),
+                      ],
+                    ),
+                  )
+                ],
+              ),
+              const Divider(height: 24),
+              const Text("Personal & Contact Information", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: _Palette.inkDark)),
+              const SizedBox(height: 10),
+              _buildProfileInfoRow(Icons.phone, "Phone Number", "+91 98765 43210"),
+              _buildProfileInfoRow(Icons.email, "Email Address", "user@decor.com"),
+              _buildProfileInfoRow(Icons.alt_route, "Assigned Route", "Shastrinagar ➔ Nari Chawkdi ➔ Waghawadi road"),
+              _buildProfileInfoRow(Icons.supervisor_account, "Reporting Officer", "Amit Shah (BHFSO-01)"),
+              _buildProfileInfoRow(Icons.calendar_month, "Date of Joining", "15 Jan 2024"),
+              const Divider(height: 24),
+              ListTile(
+                tileColor: _Palette.cardBg,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: const BorderSide(color: _Palette.border)),
+                leading: const Icon(Icons.menu_book, color: _Palette.primaryBrown),
+                title: const Text("View Product Catalogs", style: TextStyle(fontWeight: FontWeight.w600, color: _Palette.inkDark)),
+                subtitle: const Text("Explore available products & prices"),
+                trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.grey),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  viewProductCatalog();
+                },
+              ),
+              const SizedBox(height: 12),
+              ListTile(
+                tileColor: _Palette.cardBg,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: const BorderSide(color: _Palette.border)),
+                leading: const Icon(Icons.lock_reset, color: _Palette.primaryBrown),
+                title: const Text("Change Password", style: TextStyle(fontWeight: FontWeight.w600, color: _Palette.inkDark)),
+                trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.grey),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _showChangePasswordModal();
+                },
+              ),
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                height: 48,
+                child: ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.red.shade700,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  icon: const Icon(Icons.logout, color: Colors.white, size: 20),
+                  label: const Text("Logout", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                  onPressed: () {
+                    Navigator.push(context, MaterialPageRoute(builder: (ctx) => Login()));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text("Logged out successfully!")),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 16),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showChangePasswordModal() {
+    final oldController = TextEditingController();
+    final newController = TextEditingController();
+    final confirmController = TextEditingController();
+    bool hideOld = true;
+    bool hideNew = true;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setModalState) {
+          return Container(
+            decoration: const BoxDecoration(
+              color: _Palette.cardBg,
+              borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+            ),
+            padding: EdgeInsets.only(
+              top: 20,
+              left: 20,
+              right: 20,
+              bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+            ),
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(color: Colors.grey.shade400, borderRadius: BorderRadius.circular(2)),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  const Row(
+                    children: [
+                      Icon(Icons.lock_reset, color: _Palette.primaryBrown),
+                      SizedBox(width: 8),
+                      Text("Change Password", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _Palette.inkDark)),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: oldController,
+                    obscureText: hideOld,
+                    decoration: InputDecoration(
+                      labelText: "Current Password",
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                      suffixIcon: IconButton(
+                        icon: Icon(hideOld ? Icons.visibility_off : Icons.visibility),
+                        onPressed: () => setModalState(() => hideOld = !hideOld),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: newController,
+                    obscureText: hideNew,
+                    decoration: InputDecoration(
+                      labelText: "New Password",
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                      suffixIcon: IconButton(
+                        icon: Icon(hideNew ? Icons.visibility_off : Icons.visibility),
+                        onPressed: () => setModalState(() => hideNew = !hideNew),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: confirmController,
+                    obscureText: hideNew,
+                    decoration: InputDecoration(
+                      labelText: "Confirm New Password",
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 48,
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _Palette.primaryBrown,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                      onPressed: () {
+                        if (newController.text.isNotEmpty && newController.text == confirmController.text) {
+                          Navigator.pop(ctx);
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text("Password changed successfully!")),
+                          );
+                        } else {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text("Passwords do not match!")),
+                          );
+                        }
+                      },
+                      child: const Text("Update Password", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                    ),
+                  )
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  void _showAbsenceRequestDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return Dialog(
+            backgroundColor: _Palette.darkModalBg,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            child: Padding(
+              padding: const EdgeInsets.all(20.0),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Row(
+                      children: [
+                        Icon(Icons.assignment_late, color: Colors.redAccent, size: 22),
+                        SizedBox(width: 8),
+                        Text("Absence Request", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    Center(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Text(
+                          "Employee ID: $userId",
+                          style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w500),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    const Text("Type of Leave", style: TextStyle(color: Colors.redAccent, fontSize: 13, fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      decoration: BoxDecoration(
+                        color: _Palette.darkInputBg,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: DropdownButtonHideUnderline(
+                        child: DropdownButton<String>(
+                          value: selectedLeaveType,
+                          dropdownColor: _Palette.darkInputBg,
+                          isExpanded: true,
+                          style: const TextStyle(color: Colors.white, fontSize: 14),
+                          items: leaveTypes.map((type) {
+                            return DropdownMenuItem(value: type, child: Text("• $type"));
+                          }).toList(),
+                          onChanged: (val) {
+                            if (val != null) setDialogState(() => selectedLeaveType = val);
+                          },
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    const Text("From Date to End Date", style: TextStyle(color: Colors.redAccent, fontSize: 13, fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 6),
+                    InkWell(
+                      onTap: () async {
+                        final picked = await showDateRangePicker(
+                          context: context,
+                          firstDate: DateTime.now(),
+                          lastDate: DateTime.now().add(const Duration(days: 90)),
+                        );
+                        if (picked != null) {
+                          setDialogState(() => _selectedLeaveDateRange = picked);
+                        }
+                      },
+                      child: Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: _Palette.darkInputBg,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.white24),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.calendar_today, color: Colors.redAccent, size: 20),
+                            const SizedBox(width: 12),
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  _selectedLeaveDateRange == null
+                                      ? "Select Start Date"
+                                      : "${_selectedLeaveDateRange!.start.day}/${_selectedLeaveDateRange!.start.month}/${_selectedLeaveDateRange!.start.year}",
+                                  style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+                                ),
+                                Text(
+                                  _selectedLeaveDateRange == null
+                                      ? "to End Date"
+                                      : "to ${_selectedLeaveDateRange!.end.day}/${_selectedLeaveDateRange!.end.month}/${_selectedLeaveDateRange!.end.year}",
+                                  style: const TextStyle(color: Colors.white54, fontSize: 12),
+                                ),
+                              ],
+                            )
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    const Text("Reason For Leave", style: TextStyle(color: Colors.redAccent, fontSize: 13, fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 6),
+                    TextField(
+                      controller: _leaveReasonController,
+                      style: const TextStyle(color: Colors.white),
+                      maxLines: 2,
+                      decoration: InputDecoration(
+                        hintText: "Enter reason for leave",
+                        hintStyle: const TextStyle(color: Colors.white38, fontSize: 13),
+                        filled: true,
+                        fillColor: _Palette.darkInputBg,
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            style: OutlinedButton.styleFrom(
+                              side: const BorderSide(color: Colors.white38),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                            ),
+                            onPressed: () => Navigator.pop(ctx),
+                            child: const Text("Cancel", style: TextStyle(color: Colors.white)),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFFFF6B6B),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                            ),
+                            onPressed: () {
+                              if (_selectedLeaveDateRange != null && _leaveReasonController.text.isNotEmpty) {
+                                setState(() {
+                                  leaveHistory.insert(0, {
+                                    'type': selectedLeaveType,
+                                    'dates': "${_selectedLeaveDateRange!.start.day}/${_selectedLeaveDateRange!.start.month} - ${_selectedLeaveDateRange!.end.day}/${_selectedLeaveDateRange!.end.month}",
+                                    'reason': _leaveReasonController.text,
+                                    'status': 'Pending'
+                                  });
+                                  _leaveReasonController.clear();
+                                  _selectedLeaveDateRange = null;
+                                });
+                                Navigator.pop(ctx);
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text("Leave Application Submitted!")),
+                                );
+                              }
+                            },
+                            child: const Text("Submit", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                          ),
+                        ),
+                      ],
+                    )
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  void _showLeaveHistoryModal() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        decoration: const BoxDecoration(
+          color: _Palette.bgWarm,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text("Leave History Logs", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _Palette.inkDark)),
+                Icon(Icons.history_edu, color: _Palette.primaryBrown),
+              ],
+            ),
+            const Divider(),
+            Expanded(
+              child: leaveHistory.isEmpty
+                  ? const Center(child: Text("No leave history available"))
+                  : ListView.builder(
+                itemCount: leaveHistory.length,
+                itemBuilder: (ctx, idx) {
+                  final item = leaveHistory[idx];
+                  return Card(
+                    color: _Palette.cardBg,
+                    margin: const EdgeInsets.symmetric(vertical: 6),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    child: ListTile(
+                      title: Text(item['type']!, style: const TextStyle(fontWeight: FontWeight.bold, color: _Palette.inkDark)),
+                      subtitle: Text("${item['dates']}\nReason: ${item['reason']}"),
+                      trailing: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: item['status'] == 'Approved' ? Colors.green.shade100 : Colors.orange.shade100,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          item['status']!,
+                          style: TextStyle(
+                            color: item['status'] == 'Approved' ? Colors.green.shade800 : Colors.orange.shade900,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            )
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showDailyTaskHistoryModal() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _Palette.cardBg,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Row(
+          children: [
+            Icon(Icons.assignment_outlined, color: _Palette.primaryBrown),
+            SizedBox(width: 8),
+            Text("Daily Order Logs", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _Palette.inkDark)),
+          ],
+        ),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: dailyTaskHistory.isEmpty
+              ? const Padding(padding: EdgeInsets.all(20.0), child: Text("No orders logged yet.", textAlign: TextAlign.center))
+              : ListView.separated(
+            shrinkWrap: true,
+            itemCount: dailyTaskHistory.length,
+            separatorBuilder: (_, __) => const Divider(),
+            itemBuilder: (ctx, idx) {
+              final item = dailyTaskHistory[idx];
+              return ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text(item['firm']!, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                subtitle: Text("${item['category']} • ${item['product']}\nMob: ${item['mobile'] ?? 'N/A'} | PIN: ${item['pin'] ?? 'N/A'}\nQty: ${item['qty']} × ₹${item['price']}"),
+                trailing: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text("₹${item['total']}", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.green, fontSize: 13)),
+                    Text(item['time']!, style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text("Close", style: TextStyle(color: _Palette.primaryBrown, fontWeight: FontWeight.bold)),
+          )
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: _Palette.bgWarm,
+      body: SafeArea(
+        child: SingleChildScrollView(
+          child: Column(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [_Palette.darkHeaderTop, _Palette.darkHeaderBottom],
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                  ),
+                  borderRadius: BorderRadius.vertical(bottom: Radius.circular(28)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text("$userRole Dashboard", style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.white)),
+                        IconButton(
+                          icon: const Icon(Icons.manage_accounts, color: Colors.white),
+                          onPressed: _showPersonalDetailsModal,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        InkWell(
+                          borderRadius: BorderRadius.circular(32),
+                          onTap: _showPersonalDetailsModal,
+                          child: const CircleAvatar(
+                            radius: 32,
+                            backgroundColor: _Palette.goldLight,
+                            child: Icon(Icons.person, size: 42, color: _Palette.primaryBrown),
+                          ),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(userName, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white)),
+                              const SizedBox(height: 4),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: _Palette.goldAccent,
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Text(userRole, style: const TextStyle(color: _Palette.inkDark, fontSize: 12, fontWeight: FontWeight.bold)),
+                              ),
+                              const SizedBox(height: 4),
+                              Text("ID: $userId", style: const TextStyle(color: Colors.white70, fontSize: 11)),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+
+              Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  children: [
+                    _buildHierarchyLocationCard(),
+                    const SizedBox(height: 16),
+
+                    Row(
+                      children: [
+                        _buildMetricCard("₹45,200", "This Month", Icons.currency_rupee, Colors.green),
+                        const SizedBox(width: 8),
+                        _buildMetricCard("1 / 5", "Rank", Icons.emoji_events_outlined, Colors.amber),
+                        const SizedBox(width: 8),
+                        _buildMetricCard("${dailyTaskHistory.length}", "Orders", Icons.shopping_bag_outlined, Colors.blue),
+                        const SizedBox(width: 8),
+                        _buildMetricCard("0", "Pending", Icons.assignment_outlined, Colors.redAccent),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: _Palette.cardBg,
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: _Palette.border),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Row(
+                            children: [
+                              Icon(Icons.event_available, color: _Palette.primaryBrown),
+                              SizedBox(width: 10),
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text("Leave Management", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: _Palette.inkDark)),
+                                  Text("Apply & view leave history", style: TextStyle(fontSize: 11, color: Colors.grey)),
+                                ],
+                              )
+                            ],
+                          ),
+                          Row(
+                            children: [
+                              IconButton(
+                                icon: const Icon(Icons.history, color: _Palette.primaryBrown),
+                                onPressed: _showLeaveHistoryModal,
+                              ),
+                              ElevatedButton(
+                                style: ElevatedButton.styleFrom(backgroundColor: _Palette.primaryBrown),
+                                onPressed: _showAbsenceRequestDialog,
+                                child: const Text("Apply", style: TextStyle(color: Colors.white, fontSize: 12)),
+                              )
+                            ],
+                          )
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: _Palette.cardBg,
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: _Palette.border),
+                      ),
+                      child: Column(
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              const Row(
+                                children: [
+                                  Icon(Icons.fingerprint, color: _Palette.primaryBrown),
+                                  SizedBox(width: 8),
+                                  Text("Attendance & Punch", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: _Palette.inkDark)),
+                                ],
+                              ),
+                              Text(
+                                isCheckedIn ? "Checked In" : "Not Checked In",
+                                style: TextStyle(color: isCheckedIn ? Colors.green : Colors.red, fontWeight: FontWeight.bold, fontSize: 12),
+                              )
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          StreamBuilder<DateTime>(
+                            stream: _clockStream,
+                            builder: (context, snapshot) {
+                              DateTime now = snapshot.data ?? DateTime.now();
+                              return Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.symmetric(vertical: 12),
+                                decoration: BoxDecoration(color: _Palette.primaryBrown, borderRadius: BorderRadius.circular(14)),
+                                child: Column(
+                                  children: [
+                                    Text("${_getDayName(now.weekday)}, ${now.day} ${_getMonthName(now.month)} ${now.year}", style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                                    Text(
+                                      "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')}",
+                                      style: const TextStyle(color: _Palette.goldLight, fontSize: 22, fontWeight: FontWeight.bold),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            },
+                          ),
+                          const SizedBox(height: 12),
+                          SizedBox(
+                            width: double.infinity,
+                            height: 44,
+                            child: ElevatedButton.icon(
+                              style: ElevatedButton.styleFrom(backgroundColor: isCheckedIn ? Colors.red.shade700 : const Color(0xFF2E7D32)),
+                              icon: const Icon(Icons.camera_alt, color: Colors.white, size: 18),
+                              label: Text(
+                                isCheckedIn ? "Punch Out (Selfie Face Detection)" : "Punch In (Selfie Face Detection)",
+                                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                              ),
+                              onPressed: _triggerSelfiePunch,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: _Palette.cardBg,
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: _Palette.border),
+                      ),
+                      child: Form(
+                        key: _taskFormKey,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                const Row(
+                                  children: [
+                                    Icon(Icons.edit_note, color: _Palette.primaryBrown),
+                                    SizedBox(width: 8),
+                                    Text("Daily Report Log", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: _Palette.inkDark)),
+                                  ],
+                                ),
+                                Row(
+                                  children: [
+                                    IconButton(
+                                      icon: const Icon(Icons.history, color: Colors.grey),
+                                      tooltip: "Order History",
+                                      onPressed: _showDailyTaskHistoryModal,
+                                    ),
+                                  ],
+                                )
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+
+                            TextFormField(
+                              controller: _firmNameController,
+                              decoration: InputDecoration(
+                                labelText: 'Firm / Retailer Shop Name',
+                                prefixIcon: const Icon(Icons.storefront, color: _Palette.primaryBrown),
+                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                                isDense: true,
+                              ),
+                              validator: (v) => (v == null || v.isEmpty) ? 'Enter Firm Name' : null,
+                            ),
+                            const SizedBox(height: 12),
+
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: TextFormField(
+                                    controller: _mobileController,
+                                    keyboardType: TextInputType.phone,
+                                    maxLength: 10,
+                                    decoration: InputDecoration(
+                                      labelText: 'Mobile No.',
+                                      counterText: '',
+                                      prefixIcon: const Icon(Icons.phone_android, color: _Palette.primaryBrown),
+                                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                                      isDense: true,
+                                    ),
+                                    validator: (v) {
+                                      if (v == null || v.isEmpty) return 'Enter Mobile';
+                                      if (v.length < 10) return 'Enter 10 digits';
+                                      return null;
+                                    },
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: TextFormField(
+                                    controller: _pinCodeController,
+                                    keyboardType: TextInputType.number,
+                                    maxLength: 6,
+                                    decoration: InputDecoration(
+                                      labelText: 'PIN Code',
+                                      counterText: '',
+                                      prefixIcon: const Icon(Icons.location_on_outlined, color: _Palette.primaryBrown),
+                                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                                      isDense: true,
+                                    ),
+                                    validator: (v) {
+                                      if (v == null || v.isEmpty) return 'Enter PIN';
+                                      if (v.length < 6) return 'Invalid PIN';
+                                      return null;
+                                    },
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+
+                            DropdownButtonFormField<String>(
+                              value: selectedCategory,
+                              isExpanded: true,
+                              decoration: InputDecoration(
+                                labelText: 'Product Category',
+                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                                isDense: true,
+                              ),
+                              items: productCatalog.keys.map((cat) => DropdownMenuItem(
+                                value: cat,
+                                child: Text(cat, overflow: TextOverflow.ellipsis),
+                              )).toList(),
+                              onChanged: (cat) {
+                                if (cat != null) {
+                                  setState(() {
+                                    selectedCategory = cat;
+                                    selectedProductName = productCatalog[cat]!.first['name'] as String;
+                                    selectedProductPrice = (productCatalog[cat]!.first['price'] as num).toDouble();
+                                  });
+                                }
+                              },
+                            ),
+                            const SizedBox(height: 12),
+
+                            DropdownButtonFormField<String>(
+                              value: selectedProductName,
+                              isExpanded: true,
+                              decoration: InputDecoration(
+                                labelText: 'Select Product (With Rate)',
+                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                                isDense: true,
+                              ),
+                              items: productCatalog[selectedCategory]!.map((prod) {
+                                return DropdownMenuItem<String>(
+                                  value: prod['name'] as String,
+                                  child: Text(
+                                    "${prod['name']} - ₹${prod['price']}",
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                );
+                              }).toList(),
+                              onChanged: (prodName) {
+                                if (prodName != null) {
+                                  final prod = productCatalog[selectedCategory]!.firstWhere((e) => e['name'] == prodName);
+                                  setState(() {
+                                    selectedProductName = prodName;
+                                    selectedProductPrice = (prod['price'] as num).toDouble();
+                                  });
+                                }
+                              },
+                            ),
+                            const SizedBox(height: 12),
+
+                            TextFormField(
+                              controller: _qtyController,
+                              keyboardType: TextInputType.number,
+                              decoration: InputDecoration(
+                                labelText: 'Quantity',
+                                prefixIcon: const Icon(Icons.numbers, color: _Palette.primaryBrown),
+                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                                isDense: true,
+                              ),
+                              onChanged: (_) => setState(() {}),
+                              validator: (v) => (v == null || v.isEmpty) ? 'Enter Quantity' : null,
+                            ),
+                            const SizedBox(height: 12),
+
+                            Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: _Palette.cardHeaderBg,
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  const Text("Calculated Total Amount:", style: TextStyle(fontWeight: FontWeight.bold, color: _Palette.inkDark)),
+                                  Text("₹${calculatedTotal.toStringAsFixed(2)}", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.green)),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: ElevatedButton.icon(
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: _Palette.primaryBrown,
+                                      padding: const EdgeInsets.symmetric(vertical: 12),
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                    ),
+                                    icon: const Icon(Icons.check_circle_outline, color: Colors.white, size: 18),
+                                    label: const Text("Send Order", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                                    onPressed: () {
+                                      if (_taskFormKey.currentState!.validate()) {
+                                        setState(() {
+                                          dailyTaskHistory.insert(0, {
+                                            'firm': _firmNameController.text,
+                                            'mobile': _mobileController.text,
+                                            'pin': _pinCodeController.text,
+                                            'category': selectedCategory,
+                                            'product': selectedProductName,
+                                            'price': selectedProductPrice,
+                                            'qty': int.parse(_qtyController.text),
+                                            'total': calculatedTotal,
+                                            'time': "${DateTime.now().hour}:${DateTime.now().minute.toString().padLeft(2, '0')}",
+                                            'status': 'Order Taken',
+                                          });
+                                          _firmNameController.clear();
+                                          _mobileController.clear();
+                                          _pinCodeController.clear();
+                                          _qtyController.text = '1';
+                                        });
+                                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Order recorded successfully!")));
+                                      }
+                                    },
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: ElevatedButton.icon(
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: _Palette.whatsappGreen,
+                                      padding: const EdgeInsets.symmetric(vertical: 12),
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                    ),
+                                    icon: const Icon(Icons.send, color: Colors.white, size: 18),
+                                    label: const Text("WhatsApp", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                                    onPressed: () {
+                                      if (_taskFormKey.currentState!.validate()) {
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          SnackBar(content: Text("Sharing order details for ${_firmNameController.text} on WhatsApp...")),
+                                        );
+                                      }
+                                    },
+                                  ),
+                                ),
+                              ],
+                            )
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildProfileInfoRow(IconData icon, String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6.0),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 18, color: _Palette.primaryBrown),
+          const SizedBox(width: 10),
+          Text("$label: ", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.grey)),
+          Expanded(child: Text(value, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: _Palette.inkDark))),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMetricCard(String value, String title, IconData icon, Color iconColor) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 4),
+        decoration: BoxDecoration(
+          color: _Palette.cardBg,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: _Palette.border.withOpacity(0.5)),
+        ),
+        child: Column(
+          children: [
+            CircleAvatar(
+              radius: 16,
+              backgroundColor: iconColor.withOpacity(0.12),
+              child: Icon(icon, color: iconColor, size: 18),
+            ),
+            const SizedBox(height: 6),
+            Text(value, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: _Palette.inkDark)),
+            const SizedBox(height: 2),
+            Text(title, style: const TextStyle(fontSize: 10, color: Colors.grey)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _getDayName(int day) {
+    const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+    return days[day - 1];
+  }
+
+  String _getMonthName(int month) {
+    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    return months[month - 1];
+  }
+}
