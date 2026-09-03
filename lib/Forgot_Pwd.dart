@@ -1,5 +1,7 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:http/http.dart' as http;
 import 'Log_In.dart';
 
 class _Palette {
@@ -22,9 +24,13 @@ class ResetPwd extends StatefulWidget {
 }
 
 class _ResetPwdState extends State<ResetPwd> with SingleTickerProviderStateMixin {
+  // Update this URL to point to your hosted server instance
+  static const String apiUrl = "http://192.168.0.102/bhadra_foods/forgot_pwd.php";
+
   bool isEmailVerified = false;
   bool isOtpSubmitted = false;
   bool isOtpVerified = false;
+  bool isLoading = false;
 
   bool hideNewPassword = true;
   bool hideConfirmPassword = true;
@@ -54,6 +60,144 @@ class _ResetPwdState extends State<ResetPwd> with SingleTickerProviderStateMixin
     _newPasswordController.dispose();
     _confirmPasswordController.dispose();
     super.dispose();
+  }
+
+  void _showMessage(String message, {bool isError = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: isError ? Colors.red : const Color(0xFF3E8B4F),
+        duration: const Duration(seconds: 3),
+      ),
+    );
+  }
+
+  // =========================================================
+  // API Integration Methods
+  // =========================================================
+
+  Future<void> _sendOtp() async {
+    final input = _emailController.text.trim();
+    if (input.isEmpty) {
+      _showMessage("Please enter your registered Email, Mobile, or Employee ID", isError: true);
+      return;
+    }
+
+    setState(() => isLoading = true);
+
+    try {
+      final response = await http.post(
+        Uri.parse(apiUrl),
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode({
+          "action": "send_otp",
+          "input": input,
+          "device_time": DateTime.now().toIso8601String(),
+        }),
+      );
+
+      final Map<String, dynamic> responseData = jsonDecode(response.body);
+
+      if (responseData['status'] == true) {
+        setState(() {
+          isEmailVerified = true;
+          isOtpSubmitted = false;
+        });
+        _showMessage(responseData['message'] ?? 'OTP sent successfully!');
+      } else {
+        _showMessage(responseData['message'] ?? 'Failed to send OTP.', isError: true);
+      }
+    } catch (e) {
+      _showMessage("Server connection failed. Please check your network or API endpoint.", isError: true);
+    } finally {
+      if (mounted) setState(() => isLoading = false);
+    }
+  }
+
+  Future<void> _verifyOtp() async {
+    final input = _emailController.text.trim();
+    final otp = _otpController.text.trim();
+
+    if (otp.length != 4) {
+      _showMessage("Please enter a valid 4-digit OTP", isError: true);
+      return;
+    }
+
+    setState(() => isLoading = true);
+
+    try {
+      final response = await http.post(
+        Uri.parse(apiUrl),
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode({
+          "action": "verify_otp",
+          "input": input,
+          "otp": otp,
+        }),
+      );
+
+      final Map<String, dynamic> responseData = jsonDecode(response.body);
+
+      if (responseData['status'] == true) {
+        setState(() {
+          isOtpSubmitted = true;
+          isOtpVerified = true;
+        });
+        _showMessage(responseData['message'] ?? 'OTP Verified successfully!');
+      } else {
+        _showMessage(responseData['message'] ?? 'Invalid or expired OTP.', isError: true);
+      }
+    } catch (e) {
+      _showMessage("Server connection failed. Please check your network.", isError: true);
+    } finally {
+      if (mounted) setState(() => isLoading = false);
+    }
+  }
+
+  Future<void> _resetPassword() async {
+    final input = _emailController.text.trim();
+    final otp = _otpController.text.trim();
+    final newPassword = _newPasswordController.text;
+    final confirmPassword = _confirmPasswordController.text;
+
+    if (newPassword != confirmPassword) {
+      _showMessage('Passwords do not match!', isError: true);
+      return;
+    }
+
+    if (newPassword.length < 6) {
+      _showMessage('Password must be at least 6 characters long.', isError: true);
+      return;
+    }
+
+    setState(() => isLoading = true);
+
+    try {
+      final response = await http.post(
+        Uri.parse(apiUrl),
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode({
+          "action": "reset_password",
+          "input": input,
+          "otp": otp,
+          "password": newPassword,
+          "device_time": DateTime.now().toIso8601String(),
+        }),
+      );
+
+      final Map<String, dynamic> responseData = jsonDecode(response.body);
+
+      if (responseData['status'] == true) {
+        _showSuccessDialog();
+      } else {
+        _showMessage(responseData['message'] ?? 'Failed to update password.', isError: true);
+      }
+    } catch (e) {
+      _showMessage("Server connection failed. Please check your network.", isError: true);
+    } finally {
+      if (mounted) setState(() => isLoading = false);
+    }
   }
 
   double get _strength {
@@ -176,7 +320,6 @@ class _ResetPwdState extends State<ResetPwd> with SingleTickerProviderStateMixin
           ),
           child: Stack(
             children: [
-              // Soft radial background highlight behind the logo
               Align(
                 alignment: const Alignment(0, -0.75),
                 child: Container(
@@ -193,7 +336,6 @@ class _ResetPwdState extends State<ResetPwd> with SingleTickerProviderStateMixin
                   ),
                 ),
               ),
-              // Screen Body Content
               Center(
                 child: SingleChildScrollView(
                   padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
@@ -250,26 +392,22 @@ class _ResetPwdState extends State<ResetPwd> with SingleTickerProviderStateMixin
                                 children: [
                                   _sectionTitle('Reset Password'),
                                   const SizedBox(height: 20),
-                                  // Step 1: Email
-                                  _buildStepHeader('1', 'Enter Registered Email', isEmailVerified),
+                                  _buildStepHeader('1', 'Enter Registered Identifier', isEmailVerified),
                                   const SizedBox(height: 10),
                                   if (!isEmailVerified) ...[
                                     TextField(
                                       controller: _emailController,
+                                      enabled: !isLoading,
                                       style: GoogleFonts.plusJakartaSans(fontSize: 14, color: _Palette.ink),
-                                      decoration: _inputDecoration(Icons.email_outlined, 'Email Address'),
+                                      decoration: _inputDecoration(Icons.email_outlined, 'Email / Mobile / Emp ID'),
                                     ),
                                     const SizedBox(height: 10),
                                     _GradientButton(
                                       label: 'SEND OTP',
                                       icon: Icons.send_outlined,
                                       compact: true,
-                                      onPressed: () {
-                                        setState(() {
-                                          isEmailVerified = true;
-                                          isOtpSubmitted = false;
-                                        });
-                                      },
+                                      isLoading: isLoading,
+                                      onPressed: isLoading ? () {} : _sendOtp,
                                     ),
                                   ] else ...[
                                     Container(
@@ -298,15 +436,16 @@ class _ResetPwdState extends State<ResetPwd> with SingleTickerProviderStateMixin
                                     ),
                                   ],
                                   const SizedBox(height: 16),
-                                  // Step 2: OTP Verification
                                   if (isEmailVerified) ...[
                                     _buildStepHeader('2', 'Verify OTP', isOtpSubmitted),
                                     const SizedBox(height: 10),
                                     if (!isOtpSubmitted) ...[
                                       TextField(
                                         controller: _otpController,
+                                        enabled: !isLoading,
+                                        keyboardType: TextInputType.number,
                                         style: GoogleFonts.plusJakartaSans(fontSize: 14, color: _Palette.ink),
-                                        decoration: _inputDecoration(Icons.password_outlined, 'Enter OTP'),
+                                        decoration: _inputDecoration(Icons.password_outlined, 'Enter 4-Digit OTP'),
                                       ),
                                       const SizedBox(height: 10),
                                       Row(
@@ -316,25 +455,13 @@ class _ResetPwdState extends State<ResetPwd> with SingleTickerProviderStateMixin
                                               label: 'VERIFY OTP',
                                               icon: Icons.verified_outlined,
                                               compact: true,
-                                              onPressed: () {
-                                                setState(() {
-                                                  isOtpSubmitted = true;
-                                                  isOtpVerified = true;
-                                                });
-                                              },
+                                              isLoading: isLoading,
+                                              onPressed: isLoading ? () {} : _verifyOtp,
                                             ),
                                           ),
                                           const SizedBox(width: 10),
                                           TextButton(
-                                            onPressed: () {
-                                              // Resend OTP logic
-                                              ScaffoldMessenger.of(context).showSnackBar(
-                                                const SnackBar(
-                                                  content: Text('OTP resent successfully!'),
-                                                  duration: Duration(seconds: 2),
-                                                ),
-                                              );
-                                            },
+                                            onPressed: isLoading ? null : _sendOtp,
                                             child: Text(
                                               'Resend',
                                               style: GoogleFonts.plusJakartaSans(
@@ -377,6 +504,7 @@ class _ResetPwdState extends State<ResetPwd> with SingleTickerProviderStateMixin
                                     const SizedBox(height: 10),
                                     TextField(
                                       controller: _newPasswordController,
+                                      enabled: !isLoading,
                                       obscureText: hideNewPassword,
                                       onChanged: (val) => setState(() => _newPassword = val),
                                       style: GoogleFonts.plusJakartaSans(fontSize: 14, color: _Palette.ink),
@@ -404,6 +532,7 @@ class _ResetPwdState extends State<ResetPwd> with SingleTickerProviderStateMixin
                                     const SizedBox(height: 10),
                                     TextField(
                                       controller: _confirmPasswordController,
+                                      enabled: !isLoading,
                                       obscureText: hideConfirmPassword,
                                       style: GoogleFonts.plusJakartaSans(fontSize: 14, color: _Palette.ink),
                                       decoration: _inputDecoration(
@@ -423,19 +552,8 @@ class _ResetPwdState extends State<ResetPwd> with SingleTickerProviderStateMixin
                                     _GradientButton(
                                       label: 'UPDATE PASSWORD',
                                       icon: Icons.save_outlined,
-                                      onPressed: () {
-                                        if (_newPasswordController.text == _confirmPasswordController.text) {
-                                          _showSuccessDialog();
-                                        } else {
-                                          ScaffoldMessenger.of(context).showSnackBar(
-                                            const SnackBar(
-                                              content: Text('Passwords do not match!'),
-                                              backgroundColor: Colors.red,
-                                              duration: Duration(seconds: 2),
-                                            ),
-                                          );
-                                        }
-                                      },
+                                      isLoading: isLoading,
+                                      onPressed: isLoading ? () {} : _resetPassword,
                                     ),
                                   ],
                                   const SizedBox(height: 18),
@@ -681,11 +799,14 @@ class _GradientButton extends StatefulWidget {
   final IconData icon;
   final VoidCallback onPressed;
   final bool compact;
+  final bool isLoading;
+
   const _GradientButton({
     required this.label,
     required this.icon,
     required this.onPressed,
     this.compact = false,
+    this.isLoading = false,
   });
 
   @override
@@ -701,7 +822,7 @@ class _GradientButtonState extends State<_GradientButton> {
       onTapDown: (_) => setState(() => _scale = 0.97),
       onTapUp: (_) => setState(() => _scale = 1),
       onTapCancel: () => setState(() => _scale = 1),
-      onTap: widget.onPressed,
+      onTap: widget.isLoading ? null : widget.onPressed,
       child: AnimatedScale(
         scale: _scale,
         duration: const Duration(milliseconds: 110),
@@ -722,7 +843,16 @@ class _GradientButtonState extends State<_GradientButton> {
               ),
             ],
           ),
-          child: Row(
+          child: widget.isLoading
+              ? const SizedBox(
+            height: 18,
+            width: 18,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              valueColor: AlwaysStoppedAnimation<Color>(_Palette.goldLight),
+            ),
+          )
+              : Row(
             mainAxisAlignment: MainAxisAlignment.center,
             mainAxisSize: widget.compact ? MainAxisSize.min : MainAxisSize.max,
             children: [

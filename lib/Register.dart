@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:convert';
-
+import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
@@ -24,7 +26,8 @@ class Registeration extends StatefulWidget {
   State<Registeration> createState() => _RegisterationState();
 }
 
-class _RegisterationState extends State<Registeration> with SingleTickerProviderStateMixin {
+class _RegisterationState extends State<Registeration>
+    with SingleTickerProviderStateMixin {
   bool hidePassword = true;
   String selectedRole = 'Admin';
   String _password = '';
@@ -35,10 +38,7 @@ class _RegisterationState extends State<Registeration> with SingleTickerProvider
   final mobileController = TextEditingController();
   final passwordController = TextEditingController();
 
-  // Change this to your live/server URL.
-  // Example: https://yourdomain.com/api/register.php
-  static const String registerApiUrl =
-      'https://YOUR-DOMAIN.com/api/register.php';
+  static const String registerApiUrl = 'http://192.168.0.102/bhadra_foods/register.php';
 
   final List<String> roles = ['Admin'];
 
@@ -47,7 +47,8 @@ class _RegisterationState extends State<Registeration> with SingleTickerProvider
     duration: const Duration(milliseconds: 700),
   )..forward();
 
-  late final Animation<double> _fade = CurvedAnimation(parent: _entrance, curve: Curves.easeOut);
+  late final Animation<double> _fade =
+  CurvedAnimation(parent: _entrance, curve: Curves.easeOut);
   late final Animation<Offset> _slide = Tween<Offset>(
     begin: const Offset(0, 0.06),
     end: Offset.zero,
@@ -61,6 +62,21 @@ class _RegisterationState extends State<Registeration> with SingleTickerProvider
     mobileController.dispose();
     passwordController.dispose();
     super.dispose();
+  }
+
+  /// Helper to check internet connection (Web vs Mobile compatible)
+  /// Helper to check internet connection (Web vs Mobile compatible)
+  Future<bool> _hasInternetConnection() async {
+    if (kIsWeb) {
+      return true; // Web browsers handle network connectivity natively via http
+    } else {
+      try {
+        final result = await InternetAddress.lookup('google.com');
+        return result.isNotEmpty && result[0].rawAddress.isNotEmpty;
+      } catch (_) {
+        return false;
+      }
+    }
   }
 
   double get _strength {
@@ -103,7 +119,6 @@ class _RegisterationState extends State<Registeration> with SingleTickerProvider
           ),
           child: Stack(
             children: [
-              // Soft radial background highlight behind the logo
               Align(
                 alignment: const Alignment(0, -0.75),
                 child: Container(
@@ -120,136 +135,168 @@ class _RegisterationState extends State<Registeration> with SingleTickerProvider
                   ),
                 ),
               ),
-              // Screen Body Content
-              Center(
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const _GlowLogo(size: 100),
-                      const SizedBox(height: 16),
-                      Text(
-                        'BHADRA FOODS',
-                        style: GoogleFonts.cormorantGaramond(
-                          fontSize: 28,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 2,
-                          color: _Palette.goldLight,
-                        ),
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  return SingleChildScrollView(
+                    physics: const BouncingScrollPhysics(),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 24, vertical: 24),
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        minHeight: constraints.maxHeight - 48,
                       ),
-                      Text(
-                        'Create Your Account',
-                        style: GoogleFonts.plusJakartaSans(
-                          fontSize: 13,
-                          fontStyle: FontStyle.italic,
-                          color: _Palette.goldLight.withOpacity(0.8),
-                        ),
-                      ),
-                      const SizedBox(height: 24),
-                      FadeTransition(
-                        opacity: _fade,
-                        child: SlideTransition(
-                          position: _slide,
-                          child: ConstrainedBox(
-                            constraints: const BoxConstraints(maxWidth: 440),
-                            child: Container(
-                              padding: const EdgeInsets.all(24),
-                              decoration: BoxDecoration(
-                                color: _Palette.card,
-                                borderRadius: BorderRadius.circular(28),
-                                border: Border.all(color: _Palette.gold.withOpacity(0.25)),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withOpacity(0.35),
-                                    blurRadius: 30,
-                                    offset: const Offset(0, 14),
-                                  ),
-                                  BoxShadow(
-                                    color: _Palette.gold.withOpacity(0.08),
-                                    blurRadius: 40,
-                                    spreadRadius: -6,
-                                  ),
-                                ],
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: [
-                                  _sectionTitle('Register'),
-                                  const SizedBox(height: 20),
-                                  _buildDisabledAdminRole(),
-                                  const SizedBox(height: 14),
-                                  buildIconField(Icons.person_outline, 'Full Name', controller: nameController),
-                                  const SizedBox(height: 14),
-                                  buildIconField(Icons.email_outlined, 'Email Address', controller: emailController),
-                                  const SizedBox(height: 14),
-                                  buildIconField(Icons.phone_outlined, 'Mobile Number', controller: mobileController),
-                                  const SizedBox(height: 14),
-                                  buildIconField(
-                                    Icons.lock_outline,
-                                    'Password',
-                                    controller: passwordController,
-                                    isPassword: true,
-                                    onChanged: (val) => setState(() => _password = val),
-                                  ),
-                                  if (_password.isNotEmpty) ...[
-                                    const SizedBox(height: 8),
-                                    _StrengthMeter(
-                                      strength: _strength,
-                                      color: _strengthColor,
-                                      label: _strengthLabel,
-                                    ),
-                                  ],
-                                  const SizedBox(height: 14),
-                                  _GradientButton(
-                                    label: _isRegistering ? 'REGISTERING...' : 'REGISTER',
-                                    icon: _isRegistering
-                                        ? Icons.hourglass_top_rounded
-                                        : Icons.app_registration_rounded,
-                                    onPressed: _isRegistering
-                                        ? () {}
-                                        : _registerAdmin,
-                                  ),
-                                  const SizedBox(height: 18),
-                                  Row(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      Text(
-                                        'Already have an account? ',
-                                        style: GoogleFonts.plusJakartaSans(
-                                          color: Colors.grey[700],
-                                          fontSize: 13,
-                                        ),
-                                      ),
-                                      GestureDetector(
-                                        onTap: () {
-                                          Navigator.pushAndRemoveUntil(
-                                            context,
-                                            MaterialPageRoute(builder: (_) => const Login()),
-                                                (route) => false,
-                                          );
-                                        },
-                                        child: Text(
-                                          'Login',
-                                          style: GoogleFonts.plusJakartaSans(
-                                            color: _Palette.espresso,
-                                            fontWeight: FontWeight.bold,
-                                            decoration: TextDecoration.underline,
-                                            fontSize: 13,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ],
+                      child: IntrinsicHeight(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const SizedBox(height: 12),
+                            const _GlowLogo(size: 90),
+                            const SizedBox(height: 12),
+                            Text(
+                              'BHADRA FOODS',
+                              style: GoogleFonts.cormorantGaramond(
+                                fontSize: 26,
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: 2,
+                                color: _Palette.goldLight,
                               ),
                             ),
-                          ),
+                            Text(
+                              'Create Admin Account',
+                              style: GoogleFonts.plusJakartaSans(
+                                fontSize: 13,
+                                fontStyle: FontStyle.italic,
+                                color: _Palette.goldLight.withOpacity(0.8),
+                              ),
+                            ),
+                            const SizedBox(height: 20),
+                            FadeTransition(
+                              opacity: _fade,
+                              child: SlideTransition(
+                                position: _slide,
+                                child: ConstrainedBox(
+                                  constraints:
+                                  const BoxConstraints(maxWidth: 440),
+                                  child: Container(
+                                    padding: const EdgeInsets.all(20),
+                                    decoration: BoxDecoration(
+                                      color: _Palette.card,
+                                      borderRadius: BorderRadius.circular(24),
+                                      border: Border.all(
+                                          color:
+                                          _Palette.gold.withOpacity(0.25)),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.black.withOpacity(0.35),
+                                          blurRadius: 30,
+                                          offset: const Offset(0, 14),
+                                        ),
+                                        BoxShadow(
+                                          color:
+                                          _Palette.gold.withOpacity(0.08),
+                                          blurRadius: 40,
+                                          spreadRadius: -6,
+                                        ),
+                                      ],
+                                    ),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                      children: [
+                                        _sectionTitle('Register'),
+                                        const SizedBox(height: 16),
+                                        _buildDisabledAdminRole(),
+                                        const SizedBox(height: 12),
+                                        buildIconField(Icons.person_outline,
+                                            'Full Name',
+                                            controller: nameController),
+                                        const SizedBox(height: 12),
+                                        buildIconField(Icons.email_outlined,
+                                            'Email Address',
+                                            controller: emailController),
+                                        const SizedBox(height: 12),
+                                        buildIconField(Icons.phone_outlined,
+                                            'Mobile Number',
+                                            controller: mobileController),
+                                        const SizedBox(height: 12),
+                                        buildIconField(
+                                          Icons.lock_outline,
+                                          'Password',
+                                          controller: passwordController,
+                                          isPassword: true,
+                                          onChanged: (val) =>
+                                              setState(() => _password = val),
+                                        ),
+                                        if (_password.isNotEmpty) ...[
+                                          const SizedBox(height: 8),
+                                          _StrengthMeter(
+                                            strength: _strength,
+                                            color: _strengthColor,
+                                            label: _strengthLabel,
+                                          ),
+                                        ],
+                                        const SizedBox(height: 16),
+                                        _GradientButton(
+                                          label: _isRegistering
+                                              ? 'REGISTERING...'
+                                              : 'REGISTER',
+                                          icon: _isRegistering
+                                              ? Icons.hourglass_top_rounded
+                                              : Icons.app_registration_rounded,
+                                          onPressed: _isRegistering
+                                              ? () {}
+                                              : _registerAdmin,
+                                        ),
+                                        const SizedBox(height: 16),
+                                        Row(
+                                          mainAxisAlignment:
+                                          MainAxisAlignment.center,
+                                          children: [
+                                            Text(
+                                              'Already have an account? ',
+                                              style:
+                                              GoogleFonts.plusJakartaSans(
+                                                color: Colors.grey[700],
+                                                fontSize: 13,
+                                              ),
+                                            ),
+                                            GestureDetector(
+                                              onTap: () {
+                                                Navigator.pushAndRemoveUntil(
+                                                  context,
+                                                  MaterialPageRoute(
+                                                      builder: (_) =>
+                                                      const Login()),
+                                                      (route) => false,
+                                                );
+                                              },
+                                              child: Text(
+                                                'Login',
+                                                style:
+                                                GoogleFonts.plusJakartaSans(
+                                                  color: _Palette.espresso,
+                                                  fontWeight: FontWeight.bold,
+                                                  decoration:
+                                                  TextDecoration.underline,
+                                                  fontSize: 13,
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                          ],
                         ),
                       ),
-                    ],
-                  ),
-                ),
+                    ),
+                  );
+                },
               ),
             ],
           ),
@@ -260,6 +307,13 @@ class _RegisterationState extends State<Registeration> with SingleTickerProvider
 
   Future<void> _registerAdmin() async {
     FocusScope.of(context).unfocus();
+
+    // Check internet connectivity
+    bool isConnected = await _hasInternetConnection();
+    if (!isConnected) {
+      _showError('No internet connection. Please check your network.');
+      return;
+    }
 
     final name = nameController.text.trim();
     final email = emailController.text.trim();
@@ -288,42 +342,28 @@ class _RegisterationState extends State<Registeration> with SingleTickerProvider
       return;
     }
 
-    if (selectedRole != 'Admin') {
-      _showError('Only Admin registration is allowed.');
-      return;
-    }
-
     setState(() => _isRegistering = true);
 
     try {
-      final response = await http
-          .post(
+      final response = await http.post(
         Uri.parse(registerApiUrl),
-        headers: const {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
-        body: jsonEncode({
+        body: {
           'name': name,
           'email': email,
           'mobile': mobile,
           'password': password,
           'role': 'Admin',
-        }),
-      )
-          .timeout(const Duration(seconds: 30));
+        },
+      ).timeout(const Duration(seconds: 15));
 
       Map<String, dynamic> data;
       try {
         data = jsonDecode(response.body) as Map<String, dynamic>;
       } catch (_) {
-        throw Exception(
-          'Invalid server response (${response.statusCode}).',
-        );
+        throw Exception('Server error (${response.statusCode}): ${response.body}');
       }
 
-      if (response.statusCode >= 200 &&
-          response.statusCode < 300 &&
+      if ((response.statusCode == 200 || response.statusCode == 201) &&
           data['success'] == true) {
         if (!mounted) return;
         setState(() => _isRegistering = false);
@@ -335,12 +375,18 @@ class _RegisterationState extends State<Registeration> with SingleTickerProvider
           (data['message'] ?? 'Registration failed.').toString(),
         );
       }
+    } on TimeoutException {
+      if (!mounted) return;
+      setState(() => _isRegistering = false);
+      _showError('Connection timeout. Please check your internet connection.');
+    } on SocketException {
+      if (!mounted) return;
+      setState(() => _isRegistering = false);
+      _showError('No internet connection or server unavailable.');
     } catch (e) {
       if (!mounted) return;
       setState(() => _isRegistering = false);
-      _showError(
-        'Unable to connect to the server. Please check your API URL and internet connection.',
-      );
+      _showError('Connection error: ${e.toString()}');
     }
   }
 
@@ -371,23 +417,27 @@ class _RegisterationState extends State<Registeration> with SingleTickerProvider
       builder: (BuildContext dialogContext) {
         return AlertDialog(
           backgroundColor: _Palette.card,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          shape:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
           title: Row(
             children: [
-              const Icon(Icons.check_circle_rounded, color: Color(0xFF3E8B4F), size: 28),
+              const Icon(Icons.check_circle_rounded,
+                  color: Color(0xFF3E8B4F), size: 28),
               const SizedBox(width: 10),
-              Text(
-                'Registration Successful!',
-                style: GoogleFonts.cormorantGaramond(
-                  fontSize: 22,
-                  fontWeight: FontWeight.bold,
-                  color: _Palette.ink,
+              Expanded(
+                child: Text(
+                  'Registration Successful!',
+                  style: GoogleFonts.cormorantGaramond(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                    color: _Palette.ink,
+                  ),
                 ),
               ),
             ],
           ),
           content: Text(
-            'Your account has been created successfully. Please login to continue.',
+            'Admin account has been created successfully. Please login to continue.',
             style: GoogleFonts.plusJakartaSans(
               fontSize: 14,
               color: _Palette.ink,
@@ -416,7 +466,8 @@ class _RegisterationState extends State<Registeration> with SingleTickerProvider
   Widget _sectionTitle(String title) {
     return Row(
       children: [
-        const SizedBox(width: 20, child: Divider(color: _Palette.border, thickness: 2)),
+        const SizedBox(
+            width: 20, child: Divider(color: _Palette.border, thickness: 2)),
         const SizedBox(width: 8),
         Expanded(
           child: Text(
@@ -430,7 +481,8 @@ class _RegisterationState extends State<Registeration> with SingleTickerProvider
           ),
         ),
         const SizedBox(width: 8),
-        const SizedBox(width: 20, child: Divider(color: _Palette.border, thickness: 2)),
+        const SizedBox(
+            width: 20, child: Divider(color: _Palette.border, thickness: 2)),
       ],
     );
   }
@@ -447,15 +499,16 @@ class _RegisterationState extends State<Registeration> with SingleTickerProvider
         children: [
           _iconBadge(Icons.admin_panel_settings_outlined),
           const SizedBox(width: 12),
-          Text(
-            'Admin (Registration Only)',
-            style: GoogleFonts.plusJakartaSans(
-              color: _Palette.espresso,
-              fontWeight: FontWeight.w600,
-              fontSize: 14,
+          Expanded(
+            child: Text(
+              'Admin (Registration Only)',
+              style: GoogleFonts.plusJakartaSans(
+                color: _Palette.espresso,
+                fontWeight: FontWeight.w600,
+                fontSize: 14,
+              ),
             ),
           ),
-          const Spacer(),
           const Icon(Icons.lock, color: _Palette.border, size: 18),
         ],
       ),
@@ -488,7 +541,9 @@ class _RegisterationState extends State<Registeration> with SingleTickerProvider
         suffixIcon: isPassword
             ? IconButton(
           icon: Icon(
-            hidePassword ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+            hidePassword
+                ? Icons.visibility_off_outlined
+                : Icons.visibility_outlined,
             color: Colors.grey[600],
             size: 20,
           ),
@@ -497,8 +552,10 @@ class _RegisterationState extends State<Registeration> with SingleTickerProvider
             : null,
         labelText: hint,
         floatingLabelBehavior: FloatingLabelBehavior.auto,
-        labelStyle: GoogleFonts.plusJakartaSans(color: Colors.grey[600], fontSize: 14),
-        contentPadding: const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
+        labelStyle:
+        GoogleFonts.plusJakartaSans(color: Colors.grey[600], fontSize: 14),
+        contentPadding:
+        const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
         filled: true,
         fillColor: Colors.white,
         enabledBorder: OutlineInputBorder(
@@ -529,7 +586,8 @@ class _StrengthMeter extends StatelessWidget {
   final double strength;
   final Color color;
   final String label;
-  const _StrengthMeter({required this.strength, required this.color, required this.label});
+  const _StrengthMeter(
+      {required this.strength, required this.color, required this.label});
 
   @override
   Widget build(BuildContext context) {
@@ -558,7 +616,8 @@ class _StrengthMeter extends StatelessWidget {
           width: 46,
           child: Text(
             label,
-            style: GoogleFonts.plusJakartaSans(fontSize: 11, fontWeight: FontWeight.bold, color: color),
+            style: GoogleFonts.plusJakartaSans(
+                fontSize: 11, fontWeight: FontWeight.bold, color: color),
           ),
         ),
       ],
@@ -574,7 +633,8 @@ class _GlowLogo extends StatefulWidget {
   State<_GlowLogo> createState() => _GlowLogoState();
 }
 
-class _GlowLogoState extends State<_GlowLogo> with SingleTickerProviderStateMixin {
+class _GlowLogoState extends State<_GlowLogo>
+    with SingleTickerProviderStateMixin {
   late final AnimationController _controller = AnimationController(
     vsync: this,
     duration: const Duration(seconds: 2),
@@ -657,7 +717,9 @@ class _GradientButtonState extends State<_GradientButton> {
         scale: _scale,
         duration: const Duration(milliseconds: 110),
         child: Container(
-          padding: EdgeInsets.symmetric(vertical: widget.compact ? 11 : 15, horizontal: widget.compact ? 16 : 0),
+          padding: EdgeInsets.symmetric(
+              vertical: widget.compact ? 11 : 15,
+              horizontal: widget.compact ? 16 : 0),
           decoration: BoxDecoration(
             gradient: const LinearGradient(
               colors: [_Palette.espresso, _Palette.espressoDeep],
@@ -677,7 +739,8 @@ class _GradientButtonState extends State<_GradientButton> {
             mainAxisAlignment: MainAxisAlignment.center,
             mainAxisSize: widget.compact ? MainAxisSize.min : MainAxisSize.max,
             children: [
-              Icon(widget.icon, size: widget.compact ? 16 : 20, color: _Palette.goldLight),
+              Icon(widget.icon,
+                  size: widget.compact ? 16 : 20, color: _Palette.goldLight),
               const SizedBox(width: 8),
               Text(
                 widget.label,

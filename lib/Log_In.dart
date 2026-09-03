@@ -1,9 +1,13 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 import 'package:bhad_foods/Admin_Dashboard.dart';
 import 'package:bhad_foods/Salesman_Dashboard.dart';
 import 'package:bhad_foods/Sup_stockiest.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-
+import 'package:http/http.dart' as http;
 import 'Forgot_Pwd.dart';
 import 'Register.dart';
 
@@ -31,7 +35,14 @@ class Login extends StatefulWidget {
 class _LoginState extends State<Login> with SingleTickerProviderStateMixin {
   bool hidePassword = true;
   bool rememberMe = false;
+  bool isLoading = false;
   String? selectedRole;
+
+  final TextEditingController _usernameController = TextEditingController();
+  final TextEditingController _passwordController = TextEditingController();
+
+  // Update this URL according to your server deployment
+  final String _loginApiUrl = "http://192.168.0.102/bhadra_foods/login.php";
 
   final List<String> roles = [
     'Admin',
@@ -58,33 +69,158 @@ class _LoginState extends State<Login> with SingleTickerProviderStateMixin {
   @override
   void dispose() {
     _entrance.dispose();
+    _usernameController.dispose();
+    _passwordController.dispose();
     super.dispose();
   }
 
-  void _handleLogin() {
-    if (selectedRole == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Please select a role to continue'),
-          backgroundColor: Colors.redAccent,
-        ),
-      );
+  /// Helper to check internet connection (Web vs Mobile compatible)
+  Future<bool> _hasInternetConnection() async {
+    if (kIsWeb) {
+      return true; // Web browsers handle network connectivity natively
+    } else {
+      try {
+        final result = await InternetAddress.lookup('google.com');
+        return result.isNotEmpty && result[0].rawAddress.isNotEmpty;
+      } catch (_) {
+        return false;
+      }
+    }
+  }
+
+  /// Mobile / Email Input Validator
+  bool _isValidUsername(String username) {
+    // Check if input is a valid Email OR a valid Mobile Number (10+ digits)
+    final emailRegExp = RegExp(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$");
+    final mobileRegExp = RegExp(r"^[0-9]{10,12}$");
+
+    return emailRegExp.hasMatch(username) || mobileRegExp.hasMatch(username);
+  }
+
+  Future<void> _handleLogin() async {
+    // 1. Internet validation
+    bool isConnected = await _hasInternetConnection();
+    if (!isConnected) {
+      _showSnackBar('No internet connection. Please check your network.', Colors.redAccent);
       return;
     }
 
-    if (selectedRole == 'Admin') {
-      Navigator.push(
-        context,
-        MaterialPageRoute(builder: (context) => const AdminDashboard()),
-      );
-    } else if (selectedRole == "Salesman" || selectedRole == "Sales Officer" || selectedRole == "Area Sales manager"
-    || selectedRole == "Regional Sales Manager" || selectedRole == "Zone Wise Sales Manager" || selectedRole == "Sales Head"){
-      // Routes all field/salesman roles (Salesman, SO, ASM, RSM, ZSM, Sales Head) to Salesman Dashboard
-      Navigator.push(context, MaterialPageRoute(builder: (context) => const DashboardScreen()),);
+    // 2. Role validation
+    if (selectedRole == null) {
+      _showSnackBar('Please select a role to continue', Colors.redAccent);
+      return;
     }
-    else if (selectedRole == "Super Stockiest") {
-      Navigator.push(context, MaterialPageRoute(builder: (context) => SuperStockistPortal()));
+
+    final username = _usernameController.text.trim();
+    final password = _passwordController.text.trim();
+
+    // 3. Username / Password Empty check
+    if (username.isEmpty || password.isEmpty) {
+      _showSnackBar('Please enter your mobile/email and password', Colors.redAccent);
+      return;
     }
+
+    // 4. Format Validation
+    if (!_isValidUsername(username)) {
+      _showSnackBar('Please enter a valid Gmail address or 10-digit mobile number', Colors.orange);
+      return;
+    }
+
+    if (password.length < 6) {
+      _showSnackBar('Password must be at least 6 characters long', Colors.orange);
+      return;
+    }
+
+    setState(() {
+      isLoading = true;
+    });
+
+    try {
+      final response = await http.post(
+        Uri.parse(_loginApiUrl),
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/json", // Enforce JSON Acceptance
+        },
+        body: jsonEncode({
+          "role": selectedRole,
+          "username": username,
+          "password": password,
+        }),
+      ).timeout(const Duration(seconds: 15));
+
+      final data = jsonDecode(response.body);
+
+      if (response.statusCode == 200 && data['status'] == 'success') {
+        final userData = data['user'];
+        final String empId = userData['emp_id'] ?? '';
+        final String name = userData['name'] ?? '';
+        final String email = userData['email'] ?? '';
+        final String role = userData['role'] ?? selectedRole!;
+
+        _showSnackBar('Login Successful!', Colors.green);
+
+        if (!mounted) return;
+
+        // Role-based Navigation Routing
+        if (selectedRole == 'Admin') {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (context) => const AdminDashboard()),
+          );
+        } else if (selectedRole == "Salesman" ||
+            selectedRole == "Sales Officer" ||
+            selectedRole == "Area Sales Manager" ||
+            selectedRole == "Regional Sales Manager" ||
+            selectedRole == "Zone Wise Sales Manager" ||
+            selectedRole == "Sales Head") {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (context) => DashboardScreen(
+                loggedInRole: role,
+                loggedInUserId: empId,
+                loggedInUserName: name,
+                email: email,
+              ),
+            ),
+          );
+        } else if (selectedRole == "Super Stockiest") {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (context) => const SuperStockistPortal(),
+            ),
+          );
+        }
+      } else {
+        _showSnackBar(data['message'] ?? 'Login failed', Colors.redAccent);
+      }
+    } on TimeoutException {
+      _showSnackBar('Connection timeout. Please check server connection.', Colors.redAccent);
+    } on SocketException {
+      _showSnackBar('No internet connection or server unavailable.', Colors.redAccent);
+    } on FormatException {
+      _showSnackBar('Invalid response format received from server.', Colors.redAccent);
+    } catch (e) {
+      _showSnackBar('An unexpected error occurred. Please try again.', Colors.redAccent);
+    } finally {
+      if (mounted) {
+        setState(() {
+          isLoading = false;
+        });
+      }
+    }
+  }
+
+  void _showSnackBar(String message, Color color) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: color,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
   }
 
   @override
@@ -103,7 +239,6 @@ class _LoginState extends State<Login> with SingleTickerProviderStateMixin {
           ),
           child: Stack(
             children: [
-              // Soft radial background highlight behind the logo
               Align(
                 alignment: const Alignment(0, -0.75),
                 child: Container(
@@ -120,7 +255,6 @@ class _LoginState extends State<Login> with SingleTickerProviderStateMixin {
                   ),
                 ),
               ),
-              // Screen Body Content
               Center(
                 child: SingleChildScrollView(
                   padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
@@ -179,9 +313,18 @@ class _LoginState extends State<Login> with SingleTickerProviderStateMixin {
                                   const SizedBox(height: 20),
                                   _buildDropdown(),
                                   const SizedBox(height: 14),
-                                  buildIconField(Icons.person_outline, 'Mobile or Gmail'),
+                                  buildIconField(
+                                    Icons.person_outline,
+                                    'Mobile or Gmail',
+                                    controller: _usernameController,
+                                  ),
                                   const SizedBox(height: 14),
-                                  buildIconField(Icons.lock_outline, 'Password', isPassword: true),
+                                  buildIconField(
+                                    Icons.lock_outline,
+                                    'Password',
+                                    isPassword: true,
+                                    controller: _passwordController,
+                                  ),
                                   const SizedBox(height: 4),
                                   Row(
                                     mainAxisAlignment: MainAxisAlignment.end,
@@ -193,12 +336,25 @@ class _LoginState extends State<Login> with SingleTickerProviderStateMixin {
                                             MaterialPageRoute(builder: (_) => const ResetPwd()),
                                           );
                                         },
-                                        child: Text('Forgot Password?', style: GoogleFonts.plusJakartaSans(color: _Palette.ink, fontWeight: FontWeight.w600, fontSize: 13)),
+                                        child: Text(
+                                          'Forgot Password?',
+                                          style: GoogleFonts.plusJakartaSans(
+                                            color: _Palette.ink,
+                                            fontWeight: FontWeight.w600,
+                                            fontSize: 13,
+                                          ),
+                                        ),
                                       ),
                                     ],
                                   ),
                                   const SizedBox(height: 8),
-                                  _GradientButton(
+                                  isLoading
+                                      ? const Center(
+                                    child: CircularProgressIndicator(
+                                      color: _Palette.espresso,
+                                    ),
+                                  )
+                                      : _GradientButton(
                                     label: 'LOGIN',
                                     icon: Icons.login_rounded,
                                     onPressed: _handleLogin,
@@ -207,7 +363,13 @@ class _LoginState extends State<Login> with SingleTickerProviderStateMixin {
                                   Row(
                                     mainAxisAlignment: MainAxisAlignment.center,
                                     children: [
-                                      Text('New User? ', style: GoogleFonts.plusJakartaSans(color: Colors.grey[700], fontSize: 13)),
+                                      Text(
+                                        'New User? ',
+                                        style: GoogleFonts.plusJakartaSans(
+                                          color: Colors.grey[700],
+                                          fontSize: 13,
+                                        ),
+                                      ),
                                       GestureDetector(
                                         onTap: () {
                                           Navigator.push(
@@ -215,7 +377,15 @@ class _LoginState extends State<Login> with SingleTickerProviderStateMixin {
                                             MaterialPageRoute(builder: (_) => const Registeration()),
                                           );
                                         },
-                                        child: Text('Register', style: GoogleFonts.plusJakartaSans(color: _Palette.espresso, fontWeight: FontWeight.bold, decoration: TextDecoration.underline, fontSize: 13)),
+                                        child: Text(
+                                          'Register',
+                                          style: GoogleFonts.plusJakartaSans(
+                                            color: _Palette.espresso,
+                                            fontWeight: FontWeight.bold,
+                                            decoration: TextDecoration.underline,
+                                            fontSize: 13,
+                                          ),
+                                        ),
                                       ),
                                     ],
                                   ),
@@ -313,8 +483,14 @@ class _LoginState extends State<Login> with SingleTickerProviderStateMixin {
     );
   }
 
-  Widget buildIconField(IconData icon, String hint, {bool isPassword = false}) {
+  Widget buildIconField(
+      IconData icon,
+      String hint, {
+        bool isPassword = false,
+        required TextEditingController controller,
+      }) {
     return TextField(
+      controller: controller,
       obscureText: isPassword ? hidePassword : false,
       style: GoogleFonts.plusJakartaSans(fontSize: 14, color: _Palette.ink),
       decoration: InputDecoration(
