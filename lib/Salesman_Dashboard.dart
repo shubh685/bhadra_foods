@@ -32,6 +32,9 @@ class HierarchyUserLocation {
   final String userId;
   final Color themeColor;
   String addressLocation;
+  double? latitude;
+  double? longitude;
+  bool isOnline;
 
   HierarchyUserLocation({
     required this.roleKey,
@@ -40,11 +43,14 @@ class HierarchyUserLocation {
     required this.userId,
     required this.themeColor,
     required this.addressLocation,
+    this.latitude,
+    this.longitude,
+    this.isOnline = false,
   });
 }
 
 class DashboardScreen extends StatefulWidget {
-  final String loggedInRole; // 'Salesman', 'SO', 'ASM', 'RSM', 'ZSM', 'SalesHead'
+  final String loggedInRole;
   final String loggedInUserId;
   final String loggedInUserName;
   final String email;
@@ -70,6 +76,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
   late Stream<DateTime> _clockStream;
   StreamSubscription<Position>? _positionStreamSub;
   String? currentLiveAddress = "Fetching live GPS location...";
+  double? currentLatitude;
+  double? currentLongitude;
+  bool isGpsEnabled = false;
 
   // Image Picker & Face Detector Setup
   final ImagePicker _picker = ImagePicker();
@@ -77,6 +86,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     options: FaceDetectorOptions(
       performanceMode: FaceDetectorMode.fast,
       enableLandmarks: true,
+      enableContours: true,
+      enableClassification: true,
       minFaceSize: 0.1,
     ),
   );
@@ -145,56 +156,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   ];
 
   // Hierarchy Chain Data with Proper Physical Addresses
-  final List<HierarchyUserLocation> hierarchyData = [
-    HierarchyUserLocation(
-      roleKey: 'Salesman',
-      roleTitle: 'Salesman',
-      name: 'Rahul Sharma',
-      userId: 'BHFSM-01',
-      themeColor: Colors.green,
-      addressLocation: 'Fetching live position...',
-    ),
-    HierarchyUserLocation(
-      roleKey: 'SO',
-      roleTitle: 'Sales Officer (SO)',
-      name: 'Amit Shah',
-      userId: 'BHFSO-01',
-      themeColor: Colors.blue,
-      addressLocation: 'Nari Chawkdi, Ring Road, Bhavnagar',
-    ),
-    HierarchyUserLocation(
-      roleKey: 'ASM',
-      roleTitle: 'Area Sales Manager (ASM)',
-      name: 'Rajesh Patel',
-      userId: 'BHFASM-01',
-      themeColor: Colors.deepOrange,
-      addressLocation: 'Waghawadi Road, Near Jewel Circle, Bhavnagar',
-    ),
-    HierarchyUserLocation(
-      roleKey: 'RSM',
-      roleTitle: 'Regional Sales Manager (RSM)',
-      name: 'Vikas Mehta',
-      userId: 'BHFRSM-01',
-      themeColor: Colors.purple,
-      addressLocation: 'Kalvibid Circle, Opp. ISKCON Temple, Bhavnagar',
-    ),
-    HierarchyUserLocation(
-      roleKey: 'ZSM',
-      roleTitle: 'Zone Sales Manager (ZSM)',
-      name: 'Suresh Kumar',
-      userId: 'BHFZSM-01',
-      themeColor: Colors.brown,
-      addressLocation: 'Ghogha Circle, Subhashnagar, Bhavnagar',
-    ),
-    HierarchyUserLocation(
-      roleKey: 'SalesHead',
-      roleTitle: 'Sales Head',
-      name: 'Vikramaditya Roy',
-      userId: 'BHFSH-01',
-      themeColor: Colors.red,
-      addressLocation: 'Corporate HQ, Crest – 1, Waghawadi Road, Bhavnagar',
-    ),
-  ];
+  List<HierarchyUserLocation> hierarchyData = [];
 
   // Hierarchy Role Levels for Filter Logic
   final List<String> roleHierarchyOrder = [
@@ -206,6 +168,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
     'SalesHead'
   ];
 
+  // Role-based visibility mapping
+  Map<String, List<String>> get roleVisibilityMap => {
+    'Salesman': ['Salesman'],
+    'SO': ['Salesman', 'SO'],
+    'ASM': ['Salesman', 'SO', 'ASM'],
+    'RSM': ['Salesman', 'SO', 'ASM', 'RSM'],
+    'ZSM': ['Salesman', 'SO', 'ASM', 'RSM', 'ZSM'],
+    'SalesHead': ['Salesman', 'SO', 'ASM', 'RSM', 'ZSM', 'SalesHead'],
+  };
+
   @override
   void initState() {
     super.initState();
@@ -213,12 +185,89 @@ class _DashboardScreenState extends State<DashboardScreen> {
     userId = widget.loggedInUserId;
     userName = widget.loggedInUserName;
 
+    _initializeHierarchyData();
     _clockStream = Stream.periodic(const Duration(seconds: 1), (_) => DateTime.now());
     selectedCategory = productCatalog.keys.first;
     selectedProductName = productCatalog[selectedCategory]!.first['name'] as String;
     selectedProductPrice = (productCatalog[selectedCategory]!.first['price'] as num).toDouble();
 
     _initLiveGpsTracking();
+  }
+
+  void _initializeHierarchyData() {
+    hierarchyData = [
+      HierarchyUserLocation(
+        roleKey: 'Salesman',
+        roleTitle: 'Salesman',
+        name: 'Rahul Sharma',
+        userId: 'BHFSM-01',
+        themeColor: Colors.green,
+        addressLocation: 'Fetching live position...',
+        isOnline: false,
+      ),
+      HierarchyUserLocation(
+        roleKey: 'SO',
+        roleTitle: 'Sales Officer',
+        name: 'Amit Shah',
+        userId: 'BHFSO-01',
+        themeColor: Colors.blue,
+        addressLocation: 'Nari Chawkdi, Ring Road, Bhavnagar',
+        latitude: 21.7645,
+        longitude: 72.1519,
+        isOnline: true,
+      ),
+      HierarchyUserLocation(
+        roleKey: 'ASM',
+        roleTitle: 'Area Sales Manager',
+        name: 'Rajesh Patel',
+        userId: 'BHFASM-01',
+        themeColor: Colors.deepOrange,
+        addressLocation: 'Waghawadi Road, Near Jewel Circle, Bhavnagar',
+        latitude: 21.7582,
+        longitude: 72.1525,
+        isOnline: true,
+      ),
+      HierarchyUserLocation(
+        roleKey: 'RSM',
+        roleTitle: 'Regional Sales Manager',
+        name: 'Vikas Mehta',
+        userId: 'BHFRSM-01',
+        themeColor: Colors.purple,
+        addressLocation: 'Kalvibid Circle, Opp. ISKCON Temple, Bhavnagar',
+        latitude: 21.7538,
+        longitude: 72.1492,
+        isOnline: true,
+      ),
+      HierarchyUserLocation(
+        roleKey: 'ZSM',
+        roleTitle: 'Zone Sales Manager',
+        name: 'Suresh Kumar',
+        userId: 'BHFZSM-01',
+        themeColor: Colors.brown,
+        addressLocation: 'Ghogha Circle, Subhashnagar, Bhavnagar',
+        latitude: 21.7465,
+        longitude: 72.1551,
+        isOnline: true,
+      ),
+      HierarchyUserLocation(
+        roleKey: 'SalesHead',
+        roleTitle: 'Sales Head',
+        name: 'Vikramaditya Roy',
+        userId: 'BHFSH-01',
+        themeColor: Colors.red,
+        addressLocation: 'Corporate HQ, Crest – 1, Waghawadi Road, Bhavnagar',
+        latitude: 21.7623,
+        longitude: 72.1537,
+        isOnline: true,
+      ),
+    ];
+
+    // Find and update current user
+    for (var item in hierarchyData) {
+      if (item.roleKey == userRole) {
+        item.isOnline = true;
+      }
+    }
   }
 
   @override
@@ -235,11 +284,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   // Live Location & Reverse Geocoding Setup
   Future<void> _initLiveGpsTracking() async {
-    // 1. Make sure the device's GPS/location service is actually switched on.
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
       if (!mounted) return;
-      setState(() => currentLiveAddress = "Location services are OFF. Please enable GPS.");
+      setState(() {
+        currentLiveAddress = "Location services are OFF. Please enable GPS.";
+        isGpsEnabled = false;
+      });
       _showPermissionSnackBar(
         "Location services are turned off. Please enable GPS to fetch your live location.",
         settingsLabel: "ENABLE",
@@ -248,8 +299,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
       return;
     }
 
-    // 2. Check & request permission (permission_handler keeps this in sync
-    // across Android/iOS and lets us detect "permanently denied" reliably).
+    setState(() => isGpsEnabled = true);
+
     PermissionStatus permStatus = await Permission.locationWhenInUse.status;
     if (permStatus.isDenied) {
       permStatus = await Permission.locationWhenInUse.request();
@@ -259,7 +310,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       if (!mounted) return;
       setState(() => currentLiveAddress = "Location permission denied. Enable it in app settings.");
       _showPermissionSnackBar(
-        "Location permission is permanently denied. Please enable it from app settings to punch in with live location.",
+        "Location permission is permanently denied. Please enable it from app settings.",
         settingsLabel: "SETTINGS",
         onSettingsPressed: () => openAppSettings(),
       );
@@ -272,9 +323,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       return;
     }
 
-    // 3. Grab an immediate one-time GPS fix so the UI doesn't stay stuck on
-    // "Fetching live GPS location..." while it waits for the stream (the
-    // stream only emits again once the device physically moves).
     try {
       final Position initialPosition = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.high,
@@ -287,7 +335,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       }
     }
 
-    // 4. Start listening for continuous live updates.
     await _positionStreamSub?.cancel();
     _positionStreamSub = Geolocator.getPositionStream(
       locationSettings: const LocationSettings(
@@ -304,9 +351,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // Converts a raw GPS fix into a readable address, and pushes it both to
-  // the header's live-address label and to the logged-in user's own entry
-  // in the hierarchy list.
   Future<void> _updateAddressFromPosition(Position position) async {
     String resolvedAddress;
     try {
@@ -317,9 +361,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
       if (placemarks.isNotEmpty) {
         Placemark place = placemarks.first;
-        final parts = [place.street, place.subLocality, place.locality, place.postalCode]
-            .where((p) => p != null && p.trim().isNotEmpty)
-            .toList();
+        final parts = [
+          place.street,
+          place.subLocality,
+          place.locality,
+          place.postalCode
+        ].where((p) => p != null && p.trim().isNotEmpty).toList();
         resolvedAddress = parts.isNotEmpty
             ? parts.join(', ')
             : "Lat: ${position.latitude.toStringAsFixed(4)}, Long: ${position.longitude.toStringAsFixed(4)}";
@@ -333,9 +380,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (!mounted) return;
     setState(() {
       currentLiveAddress = resolvedAddress;
+      currentLatitude = position.latitude;
+      currentLongitude = position.longitude;
+
+      // Update current user's location in hierarchy
       for (var item in hierarchyData) {
         if (item.roleKey == userRole) {
           item.addressLocation = resolvedAddress;
+          item.latitude = position.latitude;
+          item.longitude = position.longitude;
+          item.isOnline = true;
         }
       }
     });
@@ -363,21 +417,41 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   List<HierarchyUserLocation> getVisibleHierarchy() {
-    int userLevelIndex = roleHierarchyOrder.indexOf(userRole);
-    if (userLevelIndex == -1) userLevelIndex = roleHierarchyOrder.length - 1;
-
+    final visibleRoles = roleVisibilityMap[userRole] ?? [];
     return hierarchyData.where((item) {
-      int itemLevelIndex = roleHierarchyOrder.indexOf(item.roleKey);
-      return itemLevelIndex <= userLevelIndex;
+      return visibleRoles.contains(item.roleKey);
     }).toList();
   }
 
-  // Camera Selfie Punch-In/Out Execution
+  // Enhanced Face Detection with Smile and Features
+  Future<Map<String, dynamic>> _analyzeFace(File imageFile) async {
+    final inputImage = InputImage.fromFile(imageFile);
+    final List<Face> faces = await _faceDetector.processImage(inputImage);
+
+    if (faces.isEmpty) {
+      return {'faces': [], 'message': 'No face detected'};
+    }
+
+    final face = faces.first;
+    Map<String, dynamic> faceFeatures = {
+      'hasSmile': face.smilingProbability ?? 0.0 > 0.5,
+      'smileProbability': face.smilingProbability ?? 0.0,
+      'leftEyeOpen': face.leftEyeOpenProbability ?? 0.0,
+      'rightEyeOpen': face.rightEyeOpenProbability ?? 0.0,
+      'headAngle': {
+        'yaw': face.headEulerAngleY ?? 0.0,
+        'pitch': face.headEulerAngleX ?? 0.0,
+        'roll': face.headEulerAngleZ ?? 0.0,
+      },
+      'hasGlasses': false, // ML Kit doesn't directly detect glasses
+      'faceCount': faces.length,
+    };
+
+    return {'faces': faces, 'features': faceFeatures, 'message': 'Face detected successfully!'};
+  }
+
   Future<void> _triggerSelfiePunch() async {
     try {
-      // 1. Explicitly check & request camera permission first. Without this,
-      // the camera can fail to open (or open a blank/black preview) with no
-      // explanation if permission was previously denied.
       PermissionStatus cameraStatus = await Permission.camera.status;
       if (cameraStatus.isDenied) {
         cameraStatus = await Permission.camera.request();
@@ -408,8 +482,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
         return;
       }
 
-      // 2. Capture the selfie. Cap the resolution so large camera images
-      // don't slow down / fail face detection on lower-end devices.
       final XFile? photo = await _picker.pickImage(
         source: ImageSource.camera,
         preferredCameraDevice: CameraDevice.front,
@@ -419,7 +491,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       );
 
       if (photo == null) {
-        // User backed out of the camera without capturing a photo.
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("Punch-in cancelled: no photo was captured.")),
@@ -448,12 +519,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ),
       );
 
-      final inputImage = InputImage.fromFile(imageFile);
-      final List<Face> faces = await _faceDetector.processImage(inputImage);
+      final result = await _analyzeFace(imageFile);
 
       if (mounted) Navigator.pop(context);
 
-      if (faces.isEmpty) {
+      if (result['faces'].isEmpty) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -465,32 +535,101 @@ class _DashboardScreenState extends State<DashboardScreen> {
       }
 
       if (!mounted) return;
+      final features = result['features'];
       showDialog(
         context: context,
         builder: (ctx) => AlertDialog(
           backgroundColor: _Palette.cardBg,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          title: const Row(
+          title: Row(
             children: [
-              Icon(Icons.verified_user, color: Colors.green),
-              SizedBox(width: 8),
-              Text("Face Verified!", style: TextStyle(color: _Palette.inkDark, fontWeight: FontWeight.bold)),
+              Icon(features['hasSmile'] ? Icons.emoji_emotions : Icons.face,
+                  color: features['hasSmile'] ? Colors.green : Colors.orange),
+              const SizedBox(width: 8),
+              Text(
+                features['hasSmile'] ? "Face Verified with Smile!" : "Face Verified!",
+                style: const TextStyle(color: _Palette.inkDark, fontWeight: FontWeight.bold),
+              ),
             ],
           ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ClipRRect(
-                borderRadius: BorderRadius.circular(16),
-                child: Image.file(imageFile, height: 180, width: double.infinity, fit: BoxFit.cover),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                "Face detected successfully.\nLocation:\n$currentLiveAddress",
-                textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 12, color: _Palette.inkDark, fontWeight: FontWeight.w600),
-              ),
-            ],
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(16),
+                  child: Image.file(imageFile, height: 180, width: double.infinity, fit: BoxFit.cover),
+                ),
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: _Palette.cardHeaderBg,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.sentiment_satisfied, color: features['hasSmile'] ? Colors.green : Colors.grey),
+                          const SizedBox(width: 8),
+                          Text(
+                            features['hasSmile'] ? "😊 Smiling! (${(features['smileProbability'] * 100).toStringAsFixed(0)}%)" : "😐 Not Smiling",
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: features['hasSmile'] ? Colors.green : Colors.grey,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          Icon(Icons.visibility, color: Colors.blue),
+                          const SizedBox(width: 8),
+                          Text(
+                            "Eyes: ${features['leftEyeOpen'] > 0.5 ? '👁️ Open' : '🔒 Closed'} / ${features['rightEyeOpen'] > 0.5 ? '👁️ Open' : '🔒 Closed'}",
+                            style: const TextStyle(fontWeight: FontWeight.w500),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          Icon(Icons.rotate_right, color: Colors.purple),
+                          const SizedBox(width: 8),
+                          Text(
+                            "Head: Yaw ${features['headAngle']['yaw'].toStringAsFixed(1)}°",
+                            style: const TextStyle(fontWeight: FontWeight.w500),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.green.shade50,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(Icons.location_on, color: Colors.red.shade700, size: 16),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                currentLiveAddress ?? "Location not available",
+                                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
           actions: [
             TextButton(
@@ -512,7 +651,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     backgroundColor: _Palette.primaryBrown,
                     content: Text(
                       isCheckedIn
-                          ? "Punch In recorded with face verification & live address!"
+                          ? "Punch In recorded! ${features['hasSmile'] ? '😊' : '😐'}"
                           : "Punch Out successful!",
                     ),
                   ),
@@ -528,6 +667,260 @@ class _DashboardScreenState extends State<DashboardScreen> {
         SnackBar(content: Text("Error processing selfie: $e")),
       );
     }
+  }
+
+  // Role-based Location Card Widget
+  Widget _buildRoleBasedLocationCard() {
+    final visibleList = getVisibleHierarchy();
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: _Palette.cardBg,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: _Palette.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: const BoxDecoration(
+                  color: Color(0xFFFDE8E8),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.my_location, color: Colors.redAccent, size: 20),
+              ),
+              const SizedBox(width: 10),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    "Live Location Tracking",
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: _Palette.inkDark),
+                  ),
+                  Text(
+                    "Role: $userRole • ${visibleList.length} members visible",
+                    style: const TextStyle(fontSize: 11, color: Colors.grey),
+                  ),
+                ],
+              ),
+              const Spacer(),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: isGpsEnabled ? Colors.green.shade50 : Colors.red.shade50,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: isGpsEnabled ? Colors.green.shade400 : Colors.red.shade400),
+                ),
+                child: Text(
+                  isGpsEnabled ? "GPS ON" : "GPS OFF",
+                  style: TextStyle(
+                    fontSize: 10,
+                    color: isGpsEnabled ? Colors.green.shade800 : Colors.red.shade800,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          if (currentLiveAddress != null && userRole == 'Salesman')
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.blue.shade50,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.blue.shade200),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.my_location, color: Colors.blue.shade700, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          "📍 My Live Location",
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                        ),
+                        Text(
+                          currentLiveAddress!,
+                          style: TextStyle(fontSize: 11, color: Colors.blue.shade900),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          const SizedBox(height: 12),
+          ListView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: visibleList.length,
+            itemBuilder: (context, index) {
+              final item = visibleList[index];
+              final isCurrentUser = item.roleKey == userRole;
+              final isLast = index == visibleList.length - 1;
+
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: isCurrentUser ? Colors.blue.shade50 : Colors.transparent,
+                      borderRadius: BorderRadius.circular(12),
+                      border: isCurrentUser ? Border.all(color: Colors.blue.shade300) : null,
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Stack(
+                          children: [
+                            CircleAvatar(
+                              radius: 16,
+                              backgroundColor: item.themeColor,
+                              child: Text(
+                                item.roleKey.substring(0, 1),
+                                style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                            if (item.isOnline)
+                              Positioned(
+                                bottom: 0,
+                                right: 0,
+                                child: Container(
+                                  width: 10,
+                                  height: 10,
+                                  decoration: const BoxDecoration(
+                                    color: Colors.green,
+                                    shape: BoxShape.circle,
+                                    border: Border.fromBorderSide(BorderSide(color: Colors.white, width: 2)),
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Text(
+                                    item.roleTitle,
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 13,
+                                      color: _Palette.inkDark,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    item.name,
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: item.themeColor,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                  if (isCurrentUser)
+                                    Container(
+                                      margin: const EdgeInsets.only(left: 6),
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: Colors.blue,
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: const Text(
+                                        "YOU",
+                                        style: TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 8,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                              const SizedBox(height: 2),
+                              Row(
+                                children: [
+                                  Icon(
+                                    Icons.location_on,
+                                    color: isCurrentUser ? Colors.blue.shade700 : Colors.grey.shade600,
+                                    size: 14,
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Expanded(
+                                    child: Text(
+                                      item.addressLocation,
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: isCurrentUser ? Colors.blue.shade900 : _Palette.inkDark,
+                                        fontWeight: isCurrentUser ? FontWeight.w600 : FontWeight.w400,
+                                      ),
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              if (item.latitude != null && item.longitude != null)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 2),
+                                  child: Text(
+                                    "📍 ${item.latitude!.toStringAsFixed(4)}, ${item.longitude!.toStringAsFixed(4)}",
+                                    style: TextStyle(
+                                      fontSize: 9,
+                                      color: Colors.grey.shade500,
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: item.isOnline ? Colors.green.shade50 : Colors.red.shade50,
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(
+                              color: item.isOnline ? Colors.green.shade400 : Colors.red.shade400,
+                            ),
+                          ),
+                          child: Text(
+                            item.isOnline ? "● Live" : "○ Offline",
+                            style: TextStyle(
+                              fontSize: 8,
+                              color: item.isOnline ? Colors.green.shade800 : Colors.red.shade800,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (!isLast)
+                    Container(
+                      margin: const EdgeInsets.only(left: 20),
+                      height: 4,
+                      width: 2,
+                      color: Colors.grey.shade300,
+                    ),
+                ],
+              );
+            },
+          ),
+        ],
+      ),
+    );
   }
 
   void viewProductCatalog() {
@@ -611,121 +1004,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
           ],
         ),
-      ),
-    );
-  }
-
-  Widget _buildHierarchyLocationCard() {
-    final visibleList = getVisibleHierarchy();
-
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: _Palette.cardBg,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: _Palette.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(6),
-                decoration: const BoxDecoration(
-                  color: Color(0xFFFDE8E8),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(Icons.my_location, color: Colors.redAccent, size: 20),
-              ),
-              const SizedBox(width: 10),
-              const Text(
-                "Hierarchy Live Address Location",
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: _Palette.inkDark),
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          Text(
-            "Showing address location for role management: $userRole",
-            style: const TextStyle(fontSize: 12, color: Colors.grey),
-          ),
-          const SizedBox(height: 16),
-          ListView.builder(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            itemCount: visibleList.length,
-            itemBuilder: (context, index) {
-              final item = visibleList[index];
-              final isLast = index == visibleList.length - 1;
-
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.only(top: 2),
-                        child: CircleAvatar(
-                          radius: 12,
-                          backgroundColor: item.themeColor,
-                          child: const Icon(Icons.location_on, size: 14, color: Colors.white),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text.rich(
-                              TextSpan(
-                                children: [
-                                  TextSpan(
-                                    text: "${item.roleTitle}: ",
-                                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: _Palette.inkDark),
-                                  ),
-                                  TextSpan(
-                                    text: item.name,
-                                    style: TextStyle(fontSize: 13, color: item.themeColor, fontWeight: FontWeight.bold),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              item.addressLocation,
-                              style: const TextStyle(fontSize: 11, color: _Palette.inkDark, fontWeight: FontWeight.w500),
-                            ),
-                          ],
-                        ),
-                      ),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-                        decoration: BoxDecoration(
-                          color: Colors.green.shade50,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: Colors.green.shade400),
-                        ),
-                        child: const Text(
-                          "Live",
-                          style: TextStyle(fontSize: 10, color: Colors.green, fontWeight: FontWeight.bold),
-                        ),
-                      ),
-                    ],
-                  ),
-                  if (!isLast)
-                    Container(
-                      margin: const EdgeInsets.only(left: 11, top: 4, bottom: 4),
-                      height: 20,
-                      width: 2,
-                      color: item.themeColor.withOpacity(0.5),
-                    ),
-                ],
-              );
-            },
-          ),
-        ],
       ),
     );
   }
@@ -1239,6 +1517,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         child: SingleChildScrollView(
           child: Column(
             children: [
+              // Header
               Container(
                 padding: const EdgeInsets.all(20),
                 decoration: const BoxDecoration(
@@ -1304,9 +1583,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 padding: const EdgeInsets.all(16.0),
                 child: Column(
                   children: [
-                    _buildHierarchyLocationCard(),
+                    // Role-based Location Card
+                    _buildRoleBasedLocationCard(),
                     const SizedBox(height: 16),
 
+                    // Metrics
                     Row(
                       children: [
                         _buildMetricCard("₹45,200", "This Month", Icons.currency_rupee, Colors.green),
@@ -1320,6 +1601,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ),
                     const SizedBox(height: 16),
 
+                    // Leave Management
                     Container(
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
@@ -1361,6 +1643,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ),
                     const SizedBox(height: 16),
 
+                    // Attendance & Punch
                     Container(
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
@@ -1415,10 +1698,31 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               style: ElevatedButton.styleFrom(backgroundColor: isCheckedIn ? Colors.red.shade700 : const Color(0xFF2E7D32)),
                               icon: const Icon(Icons.camera_alt, color: Colors.white, size: 18),
                               label: Text(
-                                isCheckedIn ? "Punch Out (Selfie Face Detection)" : "Punch In (Selfie Face Detection)",
+                                isCheckedIn ? "Punch Out (Face Detection)" : "Punch In (Face Detection)",
                                 style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                               ),
                               onPressed: _triggerSelfiePunch,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: Colors.amber.shade50,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: Colors.amber.shade300),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(Icons.info_outline, color: Colors.amber.shade700, size: 16),
+                                const SizedBox(width: 8),
+                                const Expanded(
+                                  child: Text(
+                                    "Face detection includes: Smile detection, Eye tracking, Head pose estimation",
+                                    style: TextStyle(fontSize: 10, color: Colors.amber),
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                         ],
@@ -1426,6 +1730,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ),
                     const SizedBox(height: 16),
 
+                    // Daily Report Log
                     Container(
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
