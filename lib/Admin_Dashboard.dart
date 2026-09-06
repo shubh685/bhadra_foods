@@ -2363,201 +2363,203 @@ class _AdminDashboardState extends State<AdminDashboard> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: _AdminPalette.bgWarm,
-      body: Column(
-        children: [
-          // Top Header Box
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                colors: [_AdminPalette.darkHeaderTop, _AdminPalette.darkHeaderBottom],
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
+      body: SafeArea(
+        child: Column(
+          children: [
+            // Top Header Box
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [_AdminPalette.darkHeaderTop, _AdminPalette.darkHeaderBottom],
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                ),
+              ),
+              child: Column(
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Expanded(
+                        child: Row(
+                          children: [
+                            Stack(
+                              children: [
+                                const CircleAvatar(
+                                  radius: 26,
+                                  backgroundColor: Color(0xFFEADBCE),
+                                  child: Icon(Icons.store, size: 30, color: _AdminPalette.primaryBrown),
+                                ),
+                                Positioned(
+                                  right: 0,
+                                  bottom: 0,
+                                  child: Container(
+                                    padding: const EdgeInsets.all(2),
+                                    decoration: const BoxDecoration(color: _AdminPalette.accentBadge, shape: BoxShape.circle),
+                                    child: const Icon(Icons.visibility, size: 10, color: Colors.white),
+                                  ),
+                                )
+                              ],
+                            ),
+                            const SizedBox(width: 14),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    isLoadingAdmin ? "Loading..." : (adminData?.name ?? "Bhadra Foods"),
+                                    style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Row(
+                                    children: [
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                        decoration: BoxDecoration(color: _AdminPalette.accentBadge, borderRadius: BorderRadius.circular(10)),
+                                        child: Text(
+                                          adminData?.role ?? "Supplier",
+                                          style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: _AdminPalette.inkDark),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Text(
+                                          adminData?.city ?? "Bhavnagar, Gujarat",
+                                          style: const TextStyle(fontSize: 11, color: Colors.white70),
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.more_vert, color: Colors.white),
+                        onPressed: _showOptionsMenu,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.08),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: Colors.white12),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(Icons.access_time_filled, color: _AdminPalette.accentBadge, size: 16),
+                        const SizedBox(width: 8),
+                        Flexible(
+                          child: Text(
+                            _formatDateTime(_currentTime),
+                            style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600, letterSpacing: 0.5),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ),
-            child: Column(
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        
+            // Content Body
+            Expanded(
+              child: isLoadingSalesmen
+                  ? const Center(child: CircularProgressIndicator())
+                  : errorMessage != null
+                  ? Center(child: Text("Error: $errorMessage", style: const TextStyle(color: Colors.red)))
+                  : SingleChildScrollView(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Expanded(
+                    // Stats Row
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: _AdminPalette.cardBg,
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: _AdminPalette.border),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.03),
+                            blurRadius: 10,
+                            offset: const Offset(0, 4),
+                          )
+                        ],
+                      ),
                       child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceAround,
                         children: [
-                          Stack(
-                            children: [
-                              const CircleAvatar(
-                                radius: 26,
-                                backgroundColor: Color(0xFFEADBCE),
-                                child: Icon(Icons.store, size: 30, color: _AdminPalette.primaryBrown),
-                              ),
-                              Positioned(
-                                right: 0,
-                                bottom: 0,
-                                child: Container(
-                                  padding: const EdgeInsets.all(2),
-                                  decoration: const BoxDecoration(color: _AdminPalette.accentBadge, shape: BoxShape.circle),
-                                  child: const Icon(Icons.visibility, size: 10, color: Colors.white),
-                                ),
-                              )
-                            ],
-                          ),
-                          const SizedBox(width: 14),
                           Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  isLoadingAdmin ? "Loading..." : (adminData?.name ?? "Bhadra Foods"),
-                                  style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                                const SizedBox(height: 2),
-                                Row(
-                                  children: [
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                      decoration: BoxDecoration(color: _AdminPalette.accentBadge, borderRadius: BorderRadius.circular(10)),
-                                      child: Text(
-                                        adminData?.role ?? "Supplier",
-                                        style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: _AdminPalette.inkDark),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: Text(
-                                        adminData?.city ?? "Bhavnagar, Gujarat",
-                                        style: const TextStyle(fontSize: 11, color: Colors.white70),
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ],
+                            child: InkWell(
+                              onTap: () => _showSalesmenManagementModal(),
+                              child: _buildBodyStat("${salesmenList.length}", "Salesmen", Icons.people_alt_outlined, Colors.purple),
+                            ),
+                          ),
+                          Container(height: 30, width: 1, color: Colors.black12),
+                          Expanded(
+                            child: InkWell(
+                              onTap: () => _showLeaveManagementModal(),
+                              child: _buildBodyStat("${leaveList.length}", "Leaves", Icons.time_to_leave, Colors.amber.shade800),
+                            ),
+                          ),
+                          Container(height: 30, width: 1, color: Colors.black12),
+                          Expanded(
+                            child: InkWell(
+                              onTap: () => _showCatalogModal(),
+                              child: _buildBodyStat("${productCatalog.length}", "Products", Icons.inventory_2, Colors.blue),
                             ),
                           ),
                         ],
                       ),
                     ),
-                    IconButton(
-                      icon: const Icon(Icons.more_vert, color: Colors.white),
-                      onPressed: _showOptionsMenu,
+                    const SizedBox(height: 24),
+        
+                    // Quick Actions Section Title
+                    Row(
+                      children: [
+                        Container(width: 4, height: 18, color: _AdminPalette.primaryBrown),
+                        const SizedBox(width: 8),
+                        const Text("Quick Actions", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _AdminPalette.inkDark)),
+                      ],
                     ),
+                    const SizedBox(height: 16),
+        
+                    // Grid of Action Cards
+                    GridView.count(
+                      crossAxisCount: 2,
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      crossAxisSpacing: 16,
+                      mainAxisSpacing: 16,
+                      childAspectRatio: 1.15,
+                      children: [
+                        _buildActionCard("Catalog", Icons.inventory_2_outlined, Colors.blue, _showCatalogModal),
+                        _buildActionCard("Live Map", Icons.map_outlined, Colors.teal, _showLiveTrackingModal),
+                        _buildActionCard("Manage Team", Icons.manage_accounts_outlined, Colors.purple, () => _showSalesmenManagementModal()),
+                        _buildActionCard("Manage Leave", Icons.time_to_leave_outlined, Colors.amber.shade800, _showLeaveManagementModal),
+                        _buildActionCard("Routes", Icons.route_outlined, Colors.teal, _showRouteManagementModal),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
                   ],
                 ),
-                const SizedBox(height: 14),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.08),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: Colors.white12),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(Icons.access_time_filled, color: _AdminPalette.accentBadge, size: 16),
-                      const SizedBox(width: 8),
-                      Flexible(
-                        child: Text(
-                          _formatDateTime(_currentTime),
-                          style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600, letterSpacing: 0.5),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          // Content Body
-          Expanded(
-            child: isLoadingSalesmen
-                ? const Center(child: CircularProgressIndicator())
-                : errorMessage != null
-                ? Center(child: Text("Error: $errorMessage", style: const TextStyle(color: Colors.red)))
-                : SingleChildScrollView(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Stats Row
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: _AdminPalette.cardBg,
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: _AdminPalette.border),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withOpacity(0.03),
-                          blurRadius: 10,
-                          offset: const Offset(0, 4),
-                        )
-                      ],
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceAround,
-                      children: [
-                        Expanded(
-                          child: InkWell(
-                            onTap: () => _showSalesmenManagementModal(),
-                            child: _buildBodyStat("${salesmenList.length}", "Salesmen", Icons.people_alt_outlined, Colors.purple),
-                          ),
-                        ),
-                        Container(height: 30, width: 1, color: Colors.black12),
-                        Expanded(
-                          child: InkWell(
-                            onTap: () => _showLeaveManagementModal(),
-                            child: _buildBodyStat("${leaveList.length}", "Leaves", Icons.time_to_leave, Colors.amber.shade800),
-                          ),
-                        ),
-                        Container(height: 30, width: 1, color: Colors.black12),
-                        Expanded(
-                          child: InkWell(
-                            onTap: () => _showCatalogModal(),
-                            child: _buildBodyStat("${productCatalog.length}", "Products", Icons.inventory_2, Colors.blue),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 24),
-
-                  // Quick Actions Section Title
-                  Row(
-                    children: [
-                      Container(width: 4, height: 18, color: _AdminPalette.primaryBrown),
-                      const SizedBox(width: 8),
-                      const Text("Quick Actions", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _AdminPalette.inkDark)),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-
-                  // Grid of Action Cards
-                  GridView.count(
-                    crossAxisCount: 2,
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    crossAxisSpacing: 16,
-                    mainAxisSpacing: 16,
-                    childAspectRatio: 1.15,
-                    children: [
-                      _buildActionCard("Catalog", Icons.inventory_2_outlined, Colors.blue, _showCatalogModal),
-                      _buildActionCard("Live Map", Icons.map_outlined, Colors.teal, _showLiveTrackingModal),
-                      _buildActionCard("Manage Team", Icons.manage_accounts_outlined, Colors.purple, () => _showSalesmenManagementModal()),
-                      _buildActionCard("Manage Leave", Icons.time_to_leave_outlined, Colors.amber.shade800, _showLeaveManagementModal),
-                      _buildActionCard("Routes", Icons.route_outlined, Colors.teal, _showRouteManagementModal),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                ],
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
