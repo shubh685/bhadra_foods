@@ -1,10 +1,14 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'Admin_Dashboard.dart';
 import 'Log_In.dart';
 import 'Salesman_Dashboard.dart';
+
+const String API_URL = 'http://192.168.0.102/bhadra_foods/login.php';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -58,51 +62,81 @@ class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateM
 
     _controller.forward();
 
-    // Check saved session after splash delay safely
     _navigationTimer = Timer(const Duration(seconds: 3), () {
-      _checkAutoLogin();
+      _checkAutoLoginWithBackend();
     });
   }
 
-  Future<void> _checkAutoLogin() async {
+  Future<void> _checkAutoLoginWithBackend() async {
     final prefs = await SharedPreferences.getInstance();
     final bool isLoggedIn = prefs.getBool('isLoggedIn') ?? false;
+    final String savedUsername = prefs.getString('saved_username') ?? '';
+    final String savedPassword = prefs.getString('saved_password') ?? '';
+    final String savedRole = prefs.getString('role') ?? '';
+
+    Widget targetScreen = const Login();
+
+    if (isLoggedIn && savedUsername.isNotEmpty && savedPassword.isNotEmpty && savedRole.isNotEmpty) {
+      try {
+        final response = await http.post(
+          Uri.parse(API_URL),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'username': savedUsername,
+            'password': savedPassword,
+            'role': savedRole,
+          }),
+        );
+
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body);
+
+          if (data['status'] == 'success' && data['user'] != null) {
+            final user = data['user'];
+            String role = user['role'] ?? savedRole;
+            String empId = user['emp_id'] ?? '';
+            String name = user['name'] ?? '';
+            String email = user['email'] ?? '';
+
+            // Refresh stored details
+            await prefs.setString('emp_id', empId);
+            await prefs.setString('name', name);
+            await prefs.setString('email', email);
+            await prefs.setString('role', role);
+
+            if (role.toLowerCase() == 'admin') {
+              targetScreen = const AdminDashboard();
+            } else {
+              targetScreen = DashboardScreen(
+                loggedInRole: role,
+                loggedInUserId: empId,
+                loggedInUserName: name,
+                email: email,
+              );
+            }
+          } else {
+            await prefs.clear();
+          }
+        } else {
+          await prefs.clear();
+        }
+      } catch (e) {
+        debugPrint("Auto Login Verification Failed: $e");
+        await prefs.clear();
+      }
+    }
 
     if (!mounted) return;
 
-    Widget targetScreen;
-
-    if (isLoggedIn) {
-      String role = prefs.getString('role') ?? 'Salesman';
-      String empId = prefs.getString('emp_id') ?? '';
-      String name = prefs.getString('name') ?? '';
-      String email = prefs.getString('email') ?? '';
-
-      if (role.toLowerCase() == 'admin') {
-        targetScreen = const AdminDashboard();
-      } else {
-        targetScreen = DashboardScreen(
-          loggedInRole: role,
-          loggedInUserId: empId,
-          loggedInUserName: name,
-          email: email,
-        );
-      }
-    } else {
-      targetScreen = const Login();
-    }
-
-    if (mounted) {
-      Navigator.of(context).pushReplacement(
-        PageRouteBuilder(
-          transitionDuration: const Duration(milliseconds: 800),
-          pageBuilder: (_, __, ___) => targetScreen,
-          transitionsBuilder: (_, animation, __, child) {
-            return FadeTransition(opacity: animation, child: child);
-          },
-        ),
-      );
-    }
+    Navigator.of(context).pushReplacement(
+      PageRouteBuilder(
+        transitionDuration: const Duration(milliseconds: 800),
+        pageBuilder: (_, __, ___) => targetScreen,
+        transitionsBuilder: (_, animation, __, child) {
+          return FadeTransition(opacity: animation, child: child);
+        },
+      ),
+    );
   }
 
   @override
@@ -132,7 +166,6 @@ class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateM
               scale: _scaleAnimation,
               child: Stack(
                 children: [
-                  // Centered App Logo
                   Center(
                     child: Container(
                       padding: const EdgeInsets.all(4),
@@ -157,8 +190,6 @@ class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateM
                       ),
                     ),
                   ),
-
-                  // Bottom Footer Text
                   const Align(
                     alignment: Alignment.bottomCenter,
                     child: Padding(

@@ -100,6 +100,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   String? lastPunchTime;
   String? lastPunchDay;
 
+  List<Map<String, dynamic>> attendanceHistory = [];
+
   final ImagePicker _picker = ImagePicker();
   final FaceDetector _faceDetector = FaceDetector(
     options: FaceDetectorOptions(
@@ -139,11 +141,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   // Daily Reports
   List<Map<String, dynamic>> dailyTaskHistory = [];
   List<HierarchyUserLocation> hierarchyData = [];
-
-  // Punch Status - Order Stats
-  int totalOrders = 0;
-  int pendingOrders = 0;
-  int confirmOrders = 0;
+  List<dynamic> hierarchyList = [];
+  bool isLoadingHierarchy = true;
 
   // Visibility Mapping based on Roles
   Map<String, List<String>> get roleVisibilityMap => {
@@ -202,7 +201,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     userName = widget.loggedInUserName;
     userEmail = widget.email;
 
-    _initializeHierarchyData();
     _clockStream = Stream.periodic(const Duration(seconds: 1), (_) => DateTime.now());
 
     _initLiveGpsTracking();
@@ -214,85 +212,31 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _fetchDailyReports();
     _fetchAssignedRoute();
     _fetchLeaveHistory();
-    _fetchOrderStats();
+    fetchHierarchyAndRoutes();
   }
 
-  void _initializeHierarchyData() {
-    hierarchyData = [
-      HierarchyUserLocation(
-        roleKey: 'Salesman',
-        roleTitle: 'Salesman',
-        name: 'Shubham Shah',
-        userId: 'BHFSM:-01',
-        themeColor: Colors.green,
-        addressLocation: 'Fetching live position...',
-        assignedRoute: '',
-        isOnline: false,
-      ),
-      HierarchyUserLocation(
-        roleKey: 'Sales Officer',
-        roleTitle: 'Sales Officer',
-        name: 'Amit Shah',
-        userId: 'BHFSO:-01',
-        themeColor: Colors.blue,
-        addressLocation: 'Nari Chawkdi, Ring Road, Bhavnagar',
-        assignedRoute: 'Ring Road Zone 1',
-        latitude: 21.7645,
-        longitude: 72.1519,
-        isOnline: true,
-      ),
-      HierarchyUserLocation(
-        roleKey: 'ASM',
-        roleTitle: 'Area Sales Manager',
-        name: 'Rajesh Patel',
-        userId: 'BHFAS:-01',
-        themeColor: Colors.deepOrange,
-        addressLocation: 'Waghawadi Road, Bhavnagar',
-        assignedRoute: 'Bhavnagar Central',
-        latitude: 21.7582,
-        longitude: 72.1525,
-        isOnline: true,
-      ),
-      HierarchyUserLocation(
-        roleKey: 'RSM',
-        roleTitle: 'Regional Sales Manager',
-        name: 'Vikas Mehta',
-        userId: 'BHFRS:-01',
-        themeColor: Colors.purple,
-        addressLocation: 'Kalvibid Circle, Bhavnagar',
-        assignedRoute: 'Saurashtra Region',
-        latitude: 21.7538,
-        longitude: 72.1492,
-        isOnline: true,
-      ),
-      HierarchyUserLocation(
-        roleKey: 'ZSM',
-        roleTitle: 'Zone Sales Manager',
-        name: 'Suresh Kumar',
-        userId: 'BHFZS:-01',
-        themeColor: Colors.brown,
-        addressLocation: 'Ghogha Circle, Bhavnagar',
-        assignedRoute: 'Gujarat West Zone',
-        latitude: 21.7465,
-        longitude: 72.1551,
-        isOnline: true,
-      ),
-      HierarchyUserLocation(
-        roleKey: 'Sales Head',
-        roleTitle: 'Sales Head',
-        name: 'Vikramaditya Roy',
-        userId: 'BHFSH:-01',
-        themeColor: Colors.red,
-        addressLocation: 'Corporate HQ, Crest – 1, Bhavnagar',
-        assignedRoute: 'All National Routes',
-        latitude: 21.7623,
-        longitude: 72.1537,
-        isOnline: true,
-      ),
-    ];
+  Future<void> fetchHierarchyAndRoutes() async {
+    try {
+      final response = await http.get(
+        Uri.parse('${API_BASE_URL}manage_salesman.php'),
+      );
 
-    for (var item in hierarchyData) {
-      if (item.userId == userId) item.isOnline = true;
+      if (response.statusCode == 200) {
+        final jsonResponse = jsonDecode(response.body);
+        if (jsonResponse['status'] == true) {
+          setState(() {
+            hierarchyList = jsonResponse['data'] ?? [];
+            isLoadingHierarchy = false;
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint("Error fetching live hierarchy: $e");
+      if (mounted) {
+        setState(() {
+          isLoadingHierarchy = false;
+        });
+      }
     }
   }
 
@@ -314,7 +258,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _punchCheckTimer?.cancel();
     _punchCheckTimer = Timer.periodic(const Duration(minutes: 1), (_) {
       _fetchAttendanceStatus();
-      _fetchOrderStats();
     });
   }
 
@@ -469,7 +412,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         if (newController.text.isNotEmpty &&
                             newController.text == confirmController.text &&
                             newController.text.length >= 4) {
-                          _changePassword(userId, oldController.text, newController.text);
+                          _changePassword(
+                              userId,
+                              userRole,
+                              oldController.text,
+                              newController.text
+                          );
                           Navigator.pop(ctx);
                         } else if (newController.text.length < 4) {
                           ScaffoldMessenger.of(context).showSnackBar(
@@ -499,13 +447,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Future<void> _changePassword(String identifier, String oldPassword, String newPassword) async {
+  Future<void> _changePassword(String identifier, String role, String oldPassword, String newPassword) async {
     try {
       final response = await http.post(
         Uri.parse('${API_BASE_URL}change_password.php'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({
           'identifier': identifier,
+          'role': role,
           'old_password': oldPassword,
           'new_password': newPassword,
         }),
@@ -534,29 +483,27 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Future<void> _fetchAssignedRoute() async {
     try {
-      final response = await http
-          .get(Uri.parse("${API_BASE_URL}get_salesman_routes.php?emp_id=$userId"));
+      final response = await http.get(
+        Uri.parse("${API_BASE_URL}manage_salesman.php?emp_id=$userId"),
+      );
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         if (data['status'] == true && data['data'] != null) {
           final users = data['data'] as List;
           for (var user in users) {
             if (user['emp_id'].toString() == userId) {
-              setState(() {
-                assignedRoute = user['assigned_route'] ?? 'Not Assigned';
-                for (var item in hierarchyData) {
-                  if (item.userId == userId) {
-                    item.assignedRoute = assignedRoute!;
-                  }
-                }
-              });
+              if (mounted) {
+                setState(() {
+                  assignedRoute = user['assigned_route'] ?? 'Not Assigned';
+                });
+              }
               break;
             }
           }
         }
       }
     } catch (e) {
-      debugPrint("Route Fetch API Error: $e");
+      debugPrint("Route Fetch Error: $e");
     }
   }
 
@@ -659,50 +606,28 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Future<void> _fetchOrderStats() async {
-    try {
-      final response = await http
-          .get(Uri.parse("${API_BASE_URL}manage_daily_reports.php?emp_id=$userId"));
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        if (data['status'] == 'success' && mounted) {
-          final reports = List<Map<String, dynamic>>.from(data['reports']);
-          int total = reports.length;
-          int pending = reports.where((r) =>
-              (r['order_status'] ?? '').toString().toLowerCase().contains('pending')
-          ).length;
-          int confirm = reports.where((r) =>
-              (r['order_status'] ?? '').toString().toLowerCase().contains('confirm')
-          ).length;
-
-          setState(() {
-            totalOrders = total;
-            pendingOrders = pending;
-            confirmOrders = confirm;
-          });
-        }
-      }
-    } catch (e) {
-      debugPrint("Order Stats API Error: $e");
-    }
-  }
-
+  // Attendance Status & History Fetching
   Future<void> _fetchAttendanceStatus() async {
     try {
       final response = await http
           .get(Uri.parse("${API_BASE_URL}get_attendance.php?emp_id=$userId"));
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        if (data['status'] == 'success' && data['attendance'] != null && mounted) {
+        if (data['status'] == 'success' && mounted) {
           setState(() {
-            isCheckedIn = data['attendance']['punch_type'] == 'PUNCH_IN';
-            lastPunchType = data['attendance']['punch_type'];
-            capturedPhotoUrl = data['attendance']['photo'];
-            lastPunchDate = data['attendance']['punch_date'];
-            lastPunchTime = data['attendance']['punch_time'];
-            lastPunchDay = data['attendance']['day'];
+            if (data['attendance'] != null) {
+              isCheckedIn = data['attendance']['punch_type'] == 'PUNCH_IN';
+              lastPunchType = data['attendance']['punch_type'];
+              capturedPhotoUrl = data['attendance']['photo'];
+              lastPunchDate = data['attendance']['punch_date'];
+              lastPunchTime = data['attendance']['punch_time'];
+              lastPunchDay = data['attendance']['day'];
+            }
+            if (data['history'] != null) {
+              attendanceHistory = List<Map<String, dynamic>>.from(data['history']);
+            }
           });
-        } else {
+        } else if (mounted) {
           setState(() {
             isCheckedIn = false;
             lastPunchType = null;
@@ -714,6 +639,91 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  void _showAttendanceHistoryModal() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (ctx) => Container(
+        height: MediaQuery.of(context).size.height * 0.75,
+        decoration: const BoxDecoration(
+          color: _AdminPalette.bgWarm,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text("Attendance History",
+                    style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: _AdminPalette.inkDark)),
+                IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: () => Navigator.pop(ctx),
+                )
+              ],
+            ),
+            const Divider(),
+            Expanded(
+              child: attendanceHistory.isEmpty
+                  ? const Center(child: Text("No attendance history found"))
+                  : ListView.builder(
+                itemCount: attendanceHistory.length,
+                itemBuilder: (ctx, idx) {
+                  final item = attendanceHistory[idx];
+                  final isPunchIn = item['punch_type'] == 'PUNCH_IN';
+                  final photo = item['photo'];
+
+                  return Card(
+                    color: _AdminPalette.cardBg,
+                    margin: const EdgeInsets.symmetric(vertical: 6),
+                    child: ListTile(
+                      leading: CircleAvatar(
+                        backgroundColor: isPunchIn ? Colors.green.shade100 : Colors.red.shade100,
+                        child: Icon(
+                          isPunchIn ? Icons.login : Icons.logout,
+                          color: isPunchIn ? Colors.green : Colors.red,
+                        ),
+                      ),
+                      title: Text(
+                        isPunchIn ? "Punch In" : "Punch Out",
+                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                      ),
+                      subtitle: Text(
+                        "📅 ${item['punch_date'] ?? ''} 🕐 ${item['punch_time'] ?? ''}\n📆 ${item['day'] ?? ''}",
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                      trailing: photo != null && photo.toString().isNotEmpty
+                          ? ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: Image.network(
+                          photo.toString().startsWith('http')
+                              ? photo.toString()
+                              : '${API_BASE_URL}${photo.toString()}',
+                          width: 50,
+                          height: 50,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => const Icon(Icons.person, size: 40),
+                        ),
+                      )
+                          : null,
+                    ),
+                  );
+                },
+              ),
+            )
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Submit Punch API
   Future<void> _submitPunchApi(File photoFile, String punchType) async {
     try {
       var request = http.MultipartRequest(
@@ -721,6 +731,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
       request.fields['emp_id'] = userId;
       request.fields['role'] = userRole;
       request.fields['punch_type'] = punchType;
+      request.fields['latitude'] = (currentLatitude ?? 0.0).toString();
+      request.fields['longitude'] = (currentLongitude ?? 0.0).toString();
 
       request.files
           .add(await http.MultipartFile.fromPath('photo', photoFile.path));
@@ -746,7 +758,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               backgroundColor: Colors.green,
-              content: Text(data['message'] ?? 'Punch updated successfully!'),
+              content: Text(data['message'] ?? 'Punch recorded successfully!'),
             ),
           );
           _fetchAttendanceStatus();
@@ -785,6 +797,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
       }
     } catch (e) {
       debugPrint("Leave History API Error: $e");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Error fetching leave history: $e")),
+        );
+      }
     }
   }
 
@@ -931,9 +948,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   void _showLeaveHistoryModal() {
+    // First fetch latest data from API
+    _fetchLeaveHistory();
+
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
+      isScrollControlled: true,
       builder: (ctx) => Container(
         decoration: const BoxDecoration(
           color: _AdminPalette.bgWarm,
@@ -943,12 +964,38 @@ class _DashboardScreenState extends State<DashboardScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text("Leave History",
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _AdminPalette.inkDark)),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text("Leave History",
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _AdminPalette.inkDark)),
+                IconButton(
+                  icon: const Icon(Icons.refresh, color: _AdminPalette.primaryBrown),
+                  onPressed: () {
+                    setState(() {
+                      _fetchLeaveHistory();
+                    });
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text("Refreshing leave history..."), duration: Duration(seconds: 1)),
+                    );
+                  },
+                  tooltip: "Refresh",
+                ),
+              ],
+            ),
             const Divider(),
             Expanded(
               child: leaveHistory.isEmpty
-                  ? const Center(child: Text("No leave history found"))
+                  ? const Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.hourglass_empty, size: 50, color: Colors.grey),
+                    SizedBox(height: 10),
+                    Text("No leave history found", style: TextStyle(color: Colors.grey)),
+                  ],
+                ),
+              )
                   : ListView.builder(
                 itemCount: leaveHistory.length,
                 itemBuilder: (ctx, idx) {
@@ -960,25 +1007,73 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   return Card(
                     color: _AdminPalette.cardBg,
                     margin: const EdgeInsets.symmetric(vertical: 6),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      side: BorderSide(
+                        color: statusColor.withOpacity(0.3),
+                        width: 1,
+                      ),
+                    ),
                     child: ListTile(
-                      title: Text(item['leave_type'] ?? '',
-                          style: const TextStyle(fontWeight: FontWeight.bold)),
-                      subtitle: Text("📅 ${item['start_date']} to ${item['end_date']}\n📝 ${item['reason']}"),
-                      trailing: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      leading: Container(
+                        padding: const EdgeInsets.all(8),
                         decoration: BoxDecoration(
-                          color: statusColor.withOpacity(0.2),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: statusColor),
+                          color: statusColor.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(8),
                         ),
-                        child: Text(item['status'] ?? 'Pending',
-                            style: TextStyle(fontWeight: FontWeight.bold, color: statusColor)),
+                        child: Icon(
+                          item['leave_type'] == 'Casual Leave' ? Icons.beach_access :
+                          item['leave_type'] == 'Sick Leave' ? Icons.medication :
+                          item['leave_type'] == 'Maternity Leave' ? Icons.family_restroom :
+                          item['leave_type'] == 'Paternity Leave' ? Icons.people :
+                          Icons.calendar_today,
+                          color: statusColor,
+                          size: 20,
+                        ),
+                      ),
+                      title: Text(item['leave_type'] ?? '',
+                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                      subtitle: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const SizedBox(height: 4),
+                          Text("📅 ${item['start_date']} to ${item['end_date']}",
+                              style: const TextStyle(fontSize: 12)),
+                          Text("📝 ${item['reason']}",
+                              style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                          Text("🕐 ${item['created_at'] ?? ''}",
+                              style: const TextStyle(fontSize: 10, color: Colors.grey)),
+                        ],
+                      ),
+                      trailing: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: statusColor.withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: statusColor, width: 1.5),
+                        ),
+                        child: Text(
+                          item['status'] ?? 'Pending',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: statusColor,
+                            fontSize: 11,
+                          ),
+                        ),
                       ),
                     ),
                   );
                 },
               ),
-            )
+            ),
+            const SizedBox(height: 10),
+            Center(
+              child: Text(
+                "Total: ${leaveHistory.length} leave(s)",
+                style: const TextStyle(fontSize: 12, color: Colors.grey),
+              ),
+            ),
+            const SizedBox(height: 10),
           ],
         ),
       ),
@@ -1056,7 +1151,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
         final data = json.decode(response.body);
         if (data['status'] == 'success') {
           _fetchDailyReports();
-          _fetchOrderStats();
           _firmNameController.clear();
           _mobileController.clear();
           _pinCodeController.clear();
@@ -1099,57 +1193,159 @@ class _DashboardScreenState extends State<DashboardScreen> {
       }
     } catch (e) {
       debugPrint("Daily Report Fetching Error: $e");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Error fetching daily reports: $e")),
+        );
+      }
     }
   }
 
   void _showDailyTaskHistoryModal() {
+    // First fetch latest data from API
+    _fetchDailyReports();
+
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: _AdminPalette.cardBg,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Text("Daily Orders Logged",
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-        content: SizedBox(
-          width: double.maxFinite,
-          child: dailyTaskHistory.isEmpty
-              ? const Padding(
-              padding: EdgeInsets.all(20.0),
-              child: Text("No daily reports logged.",
-                  textAlign: TextAlign.center))
-              : ListView.separated(
-            shrinkWrap: true,
-            itemCount: dailyTaskHistory.length,
-            separatorBuilder: (_, __) => const Divider(),
-            itemBuilder: (ctx, idx) {
-              final item = dailyTaskHistory[idx];
-              return ListTile(
-                contentPadding: EdgeInsets.zero,
-                title: Text(item['firm_name'] ?? '',
-                    style: const TextStyle(
-                        fontWeight: FontWeight.bold, fontSize: 13)),
-                subtitle: Text(
-                    "Item: ${item['product_name'] ?? ''}\nQty: ${item['quantity']} × ₹${item['price']}\n📍 ${item['address'] ?? ''}",
-                    style: const TextStyle(fontSize: 11)),
-                trailing: Text("₹${item['total_amount']}",
-                    style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        color: Colors.green,
-                        fontSize: 13)),
-              );
-            },
-          ),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text("Close")),
-        ],
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return Dialog(
+            backgroundColor: _AdminPalette.cardBg,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+            child: Padding(
+              padding: const EdgeInsets.all(20.0),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text("Daily Orders Logged",
+                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _AdminPalette.inkDark)),
+                      Row(
+                        children: [
+                          IconButton(
+                            icon: const Icon(Icons.refresh, color: _AdminPalette.primaryBrown),
+                            onPressed: () {
+                              setState(() {
+                                _fetchDailyReports();
+                              });
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text("Refreshing orders..."), duration: Duration(seconds: 1)),
+                              );
+                            },
+                            tooltip: "Refresh",
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.close),
+                            onPressed: () => Navigator.pop(ctx),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                  const Divider(),
+                  if (dailyTaskHistory.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 40),
+                      child: Center(
+                        child: Column(
+                          children: [
+                            Icon(Icons.shopping_bag_outlined, size: 50, color: Colors.grey),
+                            SizedBox(height: 10),
+                            Text("No daily reports logged.", style: TextStyle(color: Colors.grey)),
+                          ],
+                        ),
+                      ),
+                    )
+                  else
+                    Flexible(
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(
+                          maxHeight: MediaQuery.of(context).size.height * 0.55,
+                        ),
+                        child: ListView.separated(
+                          shrinkWrap: true,
+                          itemCount: dailyTaskHistory.length,
+                          separatorBuilder: (_, __) => const Divider(),
+                          itemBuilder: (ctx, idx) {
+                            final item = dailyTaskHistory[idx];
+                            return ListTile(
+                              contentPadding: EdgeInsets.zero,
+                              leading: Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: Colors.green.shade50,
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: const Icon(Icons.receipt_long, color: Colors.green, size: 20),
+                              ),
+                              title: Text(item['firm_name'] ?? '',
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.bold, fontSize: 14)),
+                              subtitle: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const SizedBox(height: 4),
+                                  Text("📦 ${item['category'] ?? ''} • ${item['product_name'] ?? ''}",
+                                      style: const TextStyle(fontSize: 12)),
+                                  Text("Qty: ${item['quantity']} × ₹${item['price']}",
+                                      style: const TextStyle(fontSize: 11)),
+                                  Text("📍 ${item['address'] ?? 'N/A'}",
+                                      style: const TextStyle(fontSize: 10, color: Colors.grey)),
+                                  Text("🕐 ${item['created_at'] ?? ''}",
+                                      style: const TextStyle(fontSize: 10, color: Colors.grey)),
+                                ],
+                              ),
+                              trailing: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: Colors.green.shade50,
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Text("₹${item['total_amount']}",
+                                    style: const TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.green,
+                                        fontSize: 14)),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                  if (dailyTaskHistory.isNotEmpty) ...[
+                    const SizedBox(height: 10),
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: _AdminPalette.cardHeaderBg,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text("Total Orders:",
+                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                          Text("${dailyTaskHistory.length}",
+                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.green)),
+                        ],
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 10),
+                ],
+              ),
+            ),
+          );
+        },
       ),
     );
   }
 
-  // Location Tracking
+  // Geolocator GPS Tracking
   void _start1MinLocationTimer() {
     _minuteLocationTimer?.cancel();
     _minuteLocationTimer =
@@ -1257,15 +1453,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       currentLiveAddress = resolvedAddress;
       currentLatitude = position.latitude;
       currentLongitude = position.longitude;
-
-      for (var item in hierarchyData) {
-        if (item.userId == userId) {
-          item.addressLocation = resolvedAddress;
-          item.latitude = position.latitude;
-          item.longitude = position.longitude;
-          item.isOnline = true;
-        }
-      }
     });
   }
 
@@ -1289,7 +1476,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return {'faces': faces, 'features': faceFeatures, 'message': 'Face verified!'};
   }
 
-  // Trigger Selfie Punch
+  // Selfie Punch
   Future<void> _triggerSelfiePunch() async {
     if (isCheckedIn && !isPunchOutAllowed) {
       if (!mounted) return;
@@ -1342,17 +1529,24 @@ class _DashboardScreenState extends State<DashboardScreen> {
       File imageFile = File(photo.path);
 
       if (!mounted) return;
+
+      // Show Loading Dialog
       showDialog(
         context: context,
         barrierDismissible: false,
-        builder: (ctx) => const Center(
-            child: CircularProgressIndicator(color: _AdminPalette.goldAccent)),
+        builder: (loadingCtx) => const Center(
+          child: CircularProgressIndicator(color: _AdminPalette.goldAccent),
+        ),
       );
 
       final result = await _analyzeFace(imageFile);
-      if (mounted) Navigator.pop(context);
 
-      if (result['faces'].isEmpty) {
+      // Safely dismiss loading indicator
+      if (mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
+
+      if (result == null || result['faces'] == null || (result['faces'] as List).isEmpty) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -1362,61 +1556,107 @@ class _DashboardScreenState extends State<DashboardScreen> {
         return;
       }
 
+      final bool hasSmile = result['features']?['hasSmile'] ?? false;
+
       if (!mounted) return;
       showDialog(
         context: context,
-        builder: (ctx) => AlertDialog(
+        builder: (dialogCtx) => AlertDialog(
           backgroundColor: _AdminPalette.cardBg,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
           title: Row(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(result['features']['hasSmile'] ? Icons.emoji_emotions : Icons.face,
-                  color: result['features']['hasSmile'] ? Colors.green : Colors.orange),
+              Icon(
+                hasSmile ? Icons.emoji_emotions : Icons.face,
+                color: hasSmile ? Colors.green : Colors.orange,
+              ),
               const SizedBox(width: 8),
-              Text(result['features']['hasSmile'] ? "Face Verified with Smile!" : "Face Verified!"),
+              Expanded(
+                child: Text(
+                  hasSmile ? "Face Verified with Smile!" : "Face Verified!",
+                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
             ],
           ),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(12),
-                  child: Image.file(imageFile,
-                      height: 180, width: double.infinity, fit: BoxFit.cover),
-                ),
-                const SizedBox(height: 12),
-                Text("📍 Location: ${currentLiveAddress ?? 'N/A'}",
-                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 4),
-                Text(
-                    "🕐 Time: ${DateFormat('dd-MM-yyyy HH:mm:ss').format(DateTime.now())}",
-                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
-              ],
+          content: SizedBox(
+            width: MediaQuery.of(context).size.width * 0.8,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: AspectRatio(
+                      aspectRatio: 16 / 9,
+                      child: Image.file(
+                        imageFile,
+                        fit: BoxFit.cover,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: _AdminPalette.bgWarm,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Column(
+                      children: [
+                        Text(
+                          "📍 ${currentLiveAddress ?? 'N/A'}",
+                          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          "🕐 ${DateFormat('dd-MM-yyyy HH:mm:ss').format(DateTime.now())}",
+                          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
           actions: [
             TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text("Cancel")),
+              onPressed: () => Navigator.of(dialogCtx).pop(),
+              child: const Text("Cancel", style: TextStyle(color: Colors.grey)),
+            ),
             ElevatedButton(
               style: ElevatedButton.styleFrom(
-                  backgroundColor: _AdminPalette.primaryBrown),
+                backgroundColor: _AdminPalette.primaryBrown,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
               onPressed: () async {
-                Navigator.pop(ctx);
+                Navigator.of(dialogCtx).pop();
                 final nextPunchType = isCheckedIn ? 'PUNCH_OUT' : 'PUNCH_IN';
                 await _submitPunchApi(imageFile, nextPunchType);
               },
-              child: Text(isCheckedIn ? "Confirm Punch Out" : "Confirm Punch In",
-                  style: const TextStyle(color: _AdminPalette.goldLight)),
-            )
+              child: Text(
+                isCheckedIn ? "Confirm Punch Out" : "Confirm Punch In",
+                style: const TextStyle(color: _AdminPalette.goldLight),
+              ),
+            ),
           ],
         ),
       );
     } catch (e) {
-      if (mounted && Navigator.canPop(context)) Navigator.pop(context);
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text("Selfie Error: $e")));
+      if (mounted && Navigator.of(context).canPop()) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Selfie Error: ${e.toString()}")),
+        );
+      }
     }
   }
 
@@ -1441,29 +1681,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
         .toList();
   }
 
-  Widget _buildStatItem(String label, int count, Color color) {
-    return Column(
-      children: [
-        Text(
-          count.toString(),
-          style: TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
-            color: color,
-          ),
-        ),
-        Text(
-          label,
-          style: const TextStyle(
-            fontSize: 10,
-            color: Colors.grey,
-          ),
-        ),
-      ],
-    );
-  }
-
-  // Widget Builders
   Widget _buildTopSummaryCard() {
     return Container(
       margin: const EdgeInsets.only(top: 12),
@@ -1529,8 +1746,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Widget _buildRoleBasedLocationCard() {
-    final visibleList = getVisibleHierarchy();
-
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -1549,104 +1764,152 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text("Live Hierarchy & Route Tracking",
-                        style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.bold,
-                            color: _AdminPalette.inkDark)),
+                    const Text(
+                      "Live Hierarchy & Route Tracking",
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: _AdminPalette.inkDark,
+                      ),
+                    ),
                     Text(
-                        "Role: $userRole • ${visibleList.length} User(s) Visible",
-                        style: const TextStyle(
-                            fontSize: 11, color: Colors.grey)),
+                      "Role: $userRole • ${hierarchyList.length} User(s) Visible",
+                      style: const TextStyle(fontSize: 11, color: Colors.grey),
+                    ),
                   ],
                 ),
               ),
+              IconButton(
+                icon: const Icon(Icons.refresh, size: 18, color: _AdminPalette.primaryBrown),
+                onPressed: () {
+                  setState(() => isLoadingHierarchy = true);
+                  fetchHierarchyAndRoutes();
+                },
+                tooltip: "Refresh Hierarchy",
+              ),
               Container(
-                padding:
-                const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
-                  color:
-                  isGpsEnabled ? Colors.green.shade50 : Colors.red.shade50,
+                  color: isGpsEnabled ? Colors.green.shade50 : Colors.red.shade50,
                   borderRadius: BorderRadius.circular(10),
                   border: Border.all(
-                      color: isGpsEnabled ? Colors.green : Colors.red),
+                    color: isGpsEnabled ? Colors.green : Colors.red,
+                  ),
                 ),
                 child: Text(
                   isGpsEnabled ? "GPS ON" : "GPS OFF",
                   style: TextStyle(
-                      fontSize: 10,
-                      color: isGpsEnabled
-                          ? Colors.green.shade800
-                          : Colors.red.shade800,
-                      fontWeight: FontWeight.bold),
+                    fontSize: 10,
+                    color: isGpsEnabled
+                        ? Colors.green.shade800
+                        : Colors.red.shade800,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ),
             ],
           ),
           const SizedBox(height: 12),
-          ListView.builder(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            itemCount: visibleList.length,
-            itemBuilder: (context, index) {
-              final item = visibleList[index];
-              final isCurrentUser = item.userId == userId;
-
-              return Card(
-                elevation: 0,
-                color: _AdminPalette.bgWarm,
-                margin: const EdgeInsets.only(bottom: 8),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  side: const BorderSide(color: _AdminPalette.border),
+          if (isLoadingHierarchy)
+            const Padding(
+              padding: EdgeInsets.all(20),
+              child: Center(
+                child: CircularProgressIndicator(color: _AdminPalette.goldAccent),
+              ),
+            )
+          else if (hierarchyList.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(20),
+              child: Center(
+                child: Text(
+                  "No team members found",
+                  style: TextStyle(color: Colors.grey),
                 ),
-                child: Padding(
-                  padding: const EdgeInsets.all(8.0),
-                  child: ListTile(
-                    dense: true,
-                    contentPadding: EdgeInsets.zero,
-                    leading: CircleAvatar(
-                      radius: 14,
-                      backgroundColor: item.themeColor,
-                      child: Text(item.roleKey.substring(0, 1),
+              ),
+            )
+          else
+            ListView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: hierarchyList.length,
+              itemBuilder: (context, index) {
+                final item = hierarchyList[index];
+
+                final String empId = item['emp_id']?.toString() ?? 'N/A';
+                final String name = item['name']?.toString() ?? 'User';
+                final String role = item['role']?.toString() ?? 'Salesman';
+                final String assignedRoute = item['assigned_route']?.toString() ?? 'Not Assigned';
+                final String liveLocation = item['live_location']?.toString() ?? 'Location unavailable';
+                final bool isLive = (item['is_live'] == 1 || item['is_live'] == '1');
+
+                final isCurrentUser = (empId == userId);
+
+                return Card(
+                  elevation: 0,
+                  color: _AdminPalette.bgWarm,
+                  margin: const EdgeInsets.only(bottom: 8),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    side: const BorderSide(color: _AdminPalette.border),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(8.0),
+                    child: ListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      leading: CircleAvatar(
+                        radius: 14,
+                        backgroundColor: _AdminPalette.primaryBrown,
+                        child: Text(
+                          role.isNotEmpty ? role.substring(0, 1).toUpperCase() : "U",
                           style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 10,
-                              fontWeight: FontWeight.bold)),
-                    ),
-                    title: Text("${item.roleTitle} (${item.userId})",
-                        style: const TextStyle(
-                            fontWeight: FontWeight.bold, fontSize: 12)),
-                    subtitle: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          "📍 ${isCurrentUser && currentLiveAddress != null ? currentLiveAddress! : item.addressLocation}",
-                          maxLines: 2,
-                          style: const TextStyle(fontSize: 11),
+                            color: Colors.white,
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
-                        const SizedBox(height: 2),
-                        Text(
-                          "🛣️ Route: ${isCurrentUser && assignedRoute != null ? assignedRoute : item.assignedRoute}",
-                          style: const TextStyle(
+                      ),
+                      title: Text(
+                        "$name ($empId) - $role",
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12,
+                        ),
+                      ),
+                      subtitle: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const SizedBox(height: 2),
+                          Text(
+                            "📍 ${isCurrentUser && currentLiveAddress != null ? currentLiveAddress : liveLocation}",
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 11),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            "🛣️ Route: $assignedRoute",
+                            style: const TextStyle(
                               fontSize: 11,
                               color: _AdminPalette.primaryBrown,
-                              fontWeight: FontWeight.w600),
-                        ),
-                      ],
-                    ),
-                    trailing: Text(
-                      item.isOnline ? "Live" : "Offline",
-                      style: TextStyle(
-                          color: item.isOnline ? Colors.green : Colors.grey,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                      trailing: Text(
+                        isLive ? "Live" : "Offline",
+                        style: TextStyle(
+                          color: isLive ? Colors.green : Colors.grey,
                           fontSize: 10,
-                          fontWeight: FontWeight.bold),
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
                     ),
                   ),
-                ),
-              );
-            },
-          ),
+                );
+              },
+            ),
         ],
       ),
     );
@@ -1823,36 +2086,57 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         border: Border.all(color: _AdminPalette.border),
                       ),
                       child: Column(
+                        mainAxisSize: MainAxisSize.min,
                         children: [
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              const Text("Attendance & Punch",
-                                  style: TextStyle(
-                                      fontSize: 15,
-                                      fontWeight: FontWeight.bold,
-                                      color: _AdminPalette.inkDark)),
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 10, vertical: 4),
-                                decoration: BoxDecoration(
-                                  color: isCheckedIn
-                                      ? Colors.green.shade50
-                                      : Colors.red.shade50,
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(
-                                      color: isCheckedIn
-                                          ? Colors.green
-                                          : Colors.red),
+                              Expanded(
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Flexible(
+                                      child: Text(
+                                        "Attendance & Punch",
+                                        style: TextStyle(
+                                          fontSize: 15,
+                                          fontWeight: FontWeight.bold,
+                                          color: _AdminPalette.inkDark,
+                                        ),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                    IconButton(
+                                      padding: EdgeInsets.zero,
+                                      constraints: const BoxConstraints(),
+                                      icon: const Icon(Icons.history, color: _AdminPalette.primaryBrown, size: 20),
+                                      onPressed: _showAttendanceHistoryModal,
+                                      tooltip: "Attendance History",
+                                    ),
+                                  ],
                                 ),
-                                child: Text(
-                                  isCheckedIn ? "✅ Checked In" : "❌ Not Checked In",
-                                  style: TextStyle(
-                                      color: isCheckedIn
-                                          ? Colors.green
-                                          : Colors.red,
+                              ),
+                              const SizedBox(width: 8),
+                              Flexible(
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                  decoration: BoxDecoration(
+                                    color: isCheckedIn ? Colors.green.shade50 : Colors.red.shade50,
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(
+                                      color: isCheckedIn ? Colors.green : Colors.red,
+                                    ),
+                                  ),
+                                  child: Text(
+                                    isCheckedIn ? "✅ Checked In" : "❌ Not Checked In",
+                                    overflow: TextOverflow.ellipsis,
+                                    maxLines: 1,
+                                    style: TextStyle(
+                                      color: isCheckedIn ? Colors.green : Colors.red,
                                       fontWeight: FontWeight.bold,
-                                      fontSize: 11),
+                                      fontSize: 11,
+                                    ),
+                                  ),
                                 ),
                               ),
                             ],
@@ -1860,31 +2144,26 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           const SizedBox(height: 8),
                           if (isCheckedIn) ...[
                             Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 12, vertical: 6),
+                              width: double.infinity,
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                               decoration: BoxDecoration(
-                                color: isPunchOutAllowed
-                                    ? Colors.blue.shade50
-                                    : Colors.orange.shade50,
+                                color: isPunchOutAllowed ? Colors.blue.shade50 : Colors.orange.shade50,
                                 borderRadius: BorderRadius.circular(8),
                                 border: Border.all(
-                                    color: isPunchOutAllowed
-                                        ? Colors.blue
-                                        : Colors.orange),
+                                  color: isPunchOutAllowed ? Colors.blue : Colors.orange,
+                                ),
                               ),
                               child: Text(
                                 getPunchOutStatus(),
+                                textAlign: TextAlign.center,
                                 style: TextStyle(
-                                  color: isPunchOutAllowed
-                                      ? Colors.blue.shade800
-                                      : Colors.orange.shade800,
+                                  color: isPunchOutAllowed ? Colors.blue.shade800 : Colors.orange.shade800,
                                   fontSize: 11,
                                   fontWeight: FontWeight.w500,
                                 ),
                               ),
                             ),
                             const SizedBox(height: 8),
-                            // Show Punch Details
                             if (lastPunchDate != null && lastPunchTime != null) ...[
                               Container(
                                 padding: const EdgeInsets.all(8),
@@ -1893,25 +2172,42 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                   borderRadius: BorderRadius.circular(8),
                                 ),
                                 child: Row(
-                                  mainAxisAlignment: MainAxisAlignment.spaceAround,
                                   children: [
-                                    Column(
-                                      children: [
-                                        const Text("Date", style: TextStyle(fontSize: 10, color: Colors.grey)),
-                                        Text(lastPunchDate ?? '', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                                      ],
+                                    Expanded(
+                                      child: Column(
+                                        children: [
+                                          const Text("Date", style: TextStyle(fontSize: 10, color: Colors.grey)),
+                                          Text(
+                                            lastPunchDate ?? '',
+                                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ],
+                                      ),
                                     ),
-                                    Column(
-                                      children: [
-                                        const Text("Time", style: TextStyle(fontSize: 10, color: Colors.grey)),
-                                        Text(lastPunchTime ?? '', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                                      ],
+                                    Expanded(
+                                      child: Column(
+                                        children: [
+                                          const Text("Time", style: TextStyle(fontSize: 10, color: Colors.grey)),
+                                          Text(
+                                            lastPunchTime ?? '',
+                                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ],
+                                      ),
                                     ),
-                                    Column(
-                                      children: [
-                                        const Text("Day", style: TextStyle(fontSize: 10, color: Colors.grey)),
-                                        Text(lastPunchDay ?? '', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                                      ],
+                                    Expanded(
+                                      child: Column(
+                                        children: [
+                                          const Text("Day", style: TextStyle(fontSize: 10, color: Colors.grey)),
+                                          Text(
+                                            lastPunchDay ?? '',
+                                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ],
+                                      ),
                                     ),
                                   ],
                                 ),
@@ -1919,12 +2215,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               const SizedBox(height: 8),
                             ],
                           ],
-                          // Captured Image with Decorative Container
+                          // Captured Image Display
                           if (capturedImageFile != null || (capturedPhotoUrl != null && capturedPhotoUrl!.isNotEmpty)) ...[
                             Container(
                               padding: const EdgeInsets.all(4),
                               decoration: BoxDecoration(
-                                gradient: LinearGradient(
+                                gradient: const LinearGradient(
                                   colors: [
                                     _AdminPalette.primaryBrown,
                                     _AdminPalette.goldAccent,
@@ -1948,43 +2244,40 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                   color: Colors.white,
                                   borderRadius: BorderRadius.circular(67),
                                 ),
-                                child: CircleAvatar(
-                                  radius: 60,
-                                  backgroundColor: _AdminPalette.cardBg,
-                                  backgroundImage: capturedImageFile != null
-                                      ? FileImage(capturedImageFile!)
-                                      : (capturedPhotoUrl != null && capturedPhotoUrl!.isNotEmpty
-                                      ? NetworkImage("${API_BASE_URL}${capturedPhotoUrl!}")
-                                      : null) as ImageProvider?,
-                                  child: capturedImageFile == null && (capturedPhotoUrl == null || capturedPhotoUrl!.isEmpty)
-                                      ? const Icon(Icons.person, size: 50, color: Colors.grey)
-                                      : null,
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(60),
+                                  child: SizedBox(
+                                    width: 120,
+                                    height: 120,
+                                    child: capturedImageFile != null
+                                        ? Image.file(
+                                      capturedImageFile!,
+                                      fit: BoxFit.cover,
+                                      errorBuilder: (context, error, stackTrace) {
+                                        return const Icon(Icons.person, size: 50, color: Colors.grey);
+                                      },
+                                    )
+                                        : (capturedPhotoUrl != null && capturedPhotoUrl!.isNotEmpty
+                                        ? Image.network(
+                                      capturedPhotoUrl!.startsWith('http')
+                                          ? capturedPhotoUrl!
+                                          : '$API_BASE_URL${capturedPhotoUrl!}',
+                                      fit: BoxFit.cover,
+                                      loadingBuilder: (context, child, loadingProgress) {
+                                        if (loadingProgress == null) return child;
+                                        return const Center(
+                                          child: CircularProgressIndicator(
+                                            color: _AdminPalette.goldAccent,
+                                          ),
+                                        );
+                                      },
+                                      errorBuilder: (context, error, stackTrace) {
+                                        return const Icon(Icons.person, size: 50, color: Colors.grey);
+                                      },
+                                    )
+                                        : const Icon(Icons.person, size: 50, color: Colors.grey)),
+                                  ),
                                 ),
-                              ),
-                            ),
-                            const SizedBox(height: 10),
-                            // Order Stats Row
-                            Container(
-                              padding: const EdgeInsets.all(10),
-                              decoration: BoxDecoration(
-                                gradient: LinearGradient(
-                                  colors: [
-                                    _AdminPalette.cardHeaderBg,
-                                    _AdminPalette.bgWarm,
-                                  ],
-                                  begin: Alignment.topLeft,
-                                  end: Alignment.bottomRight,
-                                ),
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(color: _AdminPalette.border),
-                              ),
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceAround,
-                                children: [
-                                  _buildStatItem("Total", totalOrders, Colors.blue),
-                                  _buildStatItem("Pending", pendingOrders, Colors.orange),
-                                  _buildStatItem("Confirm", confirmOrders, Colors.green),
-                                ],
                               ),
                             ),
                             const SizedBox(height: 10),
@@ -2000,8 +2293,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                     : Colors.grey.shade600)
                                     : const Color(0xFF2E7D32),
                               ),
-                              icon: const Icon(Icons.camera_alt,
-                                  color: Colors.white, size: 18),
+                              icon: const Icon(Icons.camera_alt, color: Colors.white, size: 18),
                               label: Text(
                                 isCheckedIn
                                     ? (isPunchOutAllowed
@@ -2009,12 +2301,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                     : "Punch Out Restricted")
                                     : "Punch In (Selfie Verify)",
                                 style: const TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.bold),
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                                overflow: TextOverflow.ellipsis,
                               ),
-                              onPressed: isCheckedIn && !isPunchOutAllowed
-                                  ? null
-                                  : _triggerSelfiePunch,
+                              onPressed: isCheckedIn && !isPunchOutAllowed ? null : _triggerSelfiePunch,
                             ),
                           ),
                           const SizedBox(height: 4),

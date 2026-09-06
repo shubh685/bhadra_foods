@@ -10,7 +10,7 @@
     <!-- Internet Permission -->
     <uses-permission android:name="android.permission.INTERNET" />
     <application
-        android:label="bhad_foods"
+        android:label="Bhadra Foods"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
