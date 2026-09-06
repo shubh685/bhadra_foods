@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:bhad_foods/Admin_Dashboard.dart';
 import 'package:bhad_foods/Salesman_Dashboard.dart';
-import 'package:bhad_foods/Sup_stockiest.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -100,14 +99,21 @@ class _LoginState extends State<Login> with SingleTickerProviderStateMixin {
   Future<void> _handleLogin() async {
     // 1. Internet validation
     bool isConnected = await _hasInternetConnection();
+
     if (!isConnected) {
-      _showSnackBar('No internet connection. Please check your network.', Colors.redAccent);
+      _showSnackBar(
+        'No internet connection. Please check your network.',
+        Colors.redAccent,
+      );
       return;
     }
 
     // 2. Role validation
     if (selectedRole == null) {
-      _showSnackBar('Please select a role to continue', Colors.redAccent);
+      _showSnackBar(
+        'Please select a role to continue',
+        Colors.redAccent,
+      );
       return;
     }
 
@@ -116,43 +122,58 @@ class _LoginState extends State<Login> with SingleTickerProviderStateMixin {
 
     // 3. Username / Password Empty check
     if (username.isEmpty || password.isEmpty) {
-      _showSnackBar('Please enter your mobile/email and password', Colors.redAccent);
+      _showSnackBar(
+        'Please enter your mobile/email and password',
+        Colors.redAccent,
+      );
       return;
     }
 
     // 4. Format Validation
     if (!_isValidUsername(username)) {
-      _showSnackBar('Please enter a valid Gmail address or 10-digit mobile number', Colors.orange);
+      _showSnackBar(
+        'Please enter a valid Gmail address or 10-digit mobile number',
+        Colors.orange,
+      );
       return;
     }
 
+    // 5. Password validation
     if (password.length < 6) {
-      _showSnackBar('Password must be at least 6 characters long', Colors.orange);
+      _showSnackBar(
+        'Password must be at least 6 characters long',
+        Colors.orange,
+      );
       return;
     }
 
+    // Start loading
     setState(() {
       isLoading = true;
     });
 
     try {
-      final response = await http.post(
+      final response = await http
+          .post(
         Uri.parse(_loginApiUrl),
         headers: {
           "Content-Type": "application/json",
-          "Accept": "application/json", // Enforce JSON Acceptance
+          "Accept": "application/json",
         },
         body: jsonEncode({
           "role": selectedRole,
           "username": username,
           "password": password,
         }),
-      ).timeout(const Duration(seconds: 15));
+      )
+          .timeout(const Duration(seconds: 15));
 
       final data = jsonDecode(response.body);
 
+      // Successful API response
       if (response.statusCode == 200 && data['status'] == 'success') {
         final userData = data['user'];
+
         final String empId = userData['emp_id'] ?? '';
         final String name = userData['name'] ?? '';
         final String email = userData['email'] ?? '';
@@ -162,18 +183,27 @@ class _LoginState extends State<Login> with SingleTickerProviderStateMixin {
 
         if (!mounted) return;
 
-        // Role-based Navigation Routing
+        // ==============================
+        // ADMIN NAVIGATION
+        // ==============================
         if (selectedRole == 'Admin') {
           Navigator.pushReplacement(
             context,
-            MaterialPageRoute(builder: (context) => const AdminDashboard()),
+            MaterialPageRoute(
+              builder: (context) => const AdminDashboard(),
+            ),
           );
-        } else if (selectedRole == "Salesman" ||
-            selectedRole == "Sales Officer" ||
-            selectedRole == "Area Sales Manager" ||
-            selectedRole == "Regional Sales Manager" ||
-            selectedRole == "Zone Wise Sales Manager" ||
-            selectedRole == "Sales Head") {
+        }
+
+        // ==============================
+        // SALESMAN / SALES STAFF
+        // ==============================
+        else if (selectedRole == 'Salesman' ||
+            selectedRole == 'Sales Officer' ||
+            selectedRole == 'Area Sales Manager' ||
+            selectedRole == 'Regional Sales Manager' ||
+            selectedRole == 'Zone Wise Sales Manager' ||
+            selectedRole == 'Sales Head') {
           Navigator.pushReplacement(
             context,
             MaterialPageRoute(
@@ -185,26 +215,93 @@ class _LoginState extends State<Login> with SingleTickerProviderStateMixin {
               ),
             ),
           );
-        } else if (selectedRole == "Super Stockiest") {
+        }
+
+        // ==============================
+        // SUPER STOCKIEST
+        // ==============================
+        else if (selectedRole == 'Super Stockiest') {
           Navigator.pushReplacement(
             context,
             MaterialPageRoute(
-              builder: (context) => const SuperStockistPortal(),
+              builder: (context) => DashboardScreen(
+                loggedInRole: role,
+                loggedInUserId: empId,
+                loggedInUserName: name,
+                email: email,
+              ),
             ),
           );
         }
-      } else {
-        _showSnackBar(data['message'] ?? 'Login failed', Colors.redAccent);
+
+        // ==============================
+        // UNKNOWN ROLE
+        // ==============================
+        else {
+          _showSnackBar(
+            'Dashboard is not available for this role.',
+            Colors.orange,
+          );
+        }
       }
-    } on TimeoutException {
-      _showSnackBar('Connection timeout. Please check server connection.', Colors.redAccent);
-    } on SocketException {
-      _showSnackBar('No internet connection or server unavailable.', Colors.redAccent);
-    } on FormatException {
-      _showSnackBar('Invalid response format received from server.', Colors.redAccent);
-    } catch (e) {
-      _showSnackBar('An unexpected error occurred. Please try again.', Colors.redAccent);
-    } finally {
+
+      // ==============================
+      // LOGIN FAILED
+      // ==============================
+      else {
+        _showSnackBar(
+          data['message'] ?? 'Login failed',
+          Colors.redAccent,
+        );
+      }
+    }
+
+    // ==============================
+    // TIMEOUT ERROR
+    // ==============================
+    on TimeoutException {
+      _showSnackBar(
+        'Connection timeout. Please check server connection.',
+        Colors.redAccent,
+      );
+    }
+
+    // ==============================
+    // SOCKET ERROR
+    // ==============================
+    on SocketException {
+      _showSnackBar(
+        'No internet connection or server unavailable.',
+        Colors.redAccent,
+      );
+    }
+
+    // ==============================
+    // JSON FORMAT ERROR
+    // ==============================
+    on FormatException {
+      _showSnackBar(
+        'Invalid response format received from server.',
+        Colors.redAccent,
+      );
+    }
+
+    // ==============================
+    // OTHER ERROR
+    // ==============================
+    catch (e) {
+      _showSnackBar(
+        'An unexpected error occurred. Please try again.',
+        Colors.redAccent,
+      );
+
+      debugPrint('Login Error: $e');
+    }
+
+    // ==============================
+    // STOP LOADING
+    // ==============================
+    finally {
       if (mounted) {
         setState(() {
           isLoading = false;

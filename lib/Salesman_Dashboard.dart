@@ -1,12 +1,15 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
-import 'package:bhad_foods/Log_In.dart';
 import 'package:flutter/material.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
+import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
+import 'package:intl/intl.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class _Palette {
   static const darkHeaderTop = Color(0xFF381C00);
@@ -24,7 +27,6 @@ class _Palette {
   static const darkInputBg = Color(0xFF242F42);
 }
 
-// Model for reporting chain live positions with Proper Physical Address
 class HierarchyUserLocation {
   final String roleKey;
   final String roleTitle;
@@ -57,10 +59,10 @@ class DashboardScreen extends StatefulWidget {
 
   const DashboardScreen({
     super.key,
-    this.loggedInRole = 'ZSM',
-    this.loggedInUserId = 'BHFZSM-01',
+    this.loggedInRole = 'Salesman',
+    this.loggedInUserId = 'BHFSM-01',
     this.loggedInUserName = 'Suresh Kumar',
-    this.email = "abc@gmail.com"
+    this.email = "abc@gmail.com",
   });
 
   @override
@@ -68,19 +70,24 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
+  final String baseUrl = "http://10.0.2.2/bhadra_foods";
+
   late String userRole;
   late String userId;
   late String userName;
+  late String userEmail;
 
   bool isCheckedIn = false;
+  bool isLoadingData = true;
   late Stream<DateTime> _clockStream;
   StreamSubscription<Position>? _positionStreamSub;
+  Timer? _minuteLocationTimer;
+
   String? currentLiveAddress = "Fetching live GPS location...";
   double? currentLatitude;
   double? currentLongitude;
   bool isGpsEnabled = false;
 
-  // Image Picker & Face Detector Setup
   final ImagePicker _picker = ImagePicker();
   final FaceDetector _faceDetector = FaceDetector(
     options: FaceDetectorOptions(
@@ -92,27 +99,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
     ),
   );
 
-  // Form Controllers
   final _taskFormKey = GlobalKey<FormState>();
   final _firmNameController = TextEditingController();
   final _mobileController = TextEditingController();
   final _pinCodeController = TextEditingController();
   final _qtyController = TextEditingController(text: '1');
 
-  // Dynamic Product Catalog
-  final Map<String, List<Map<String, dynamic>>> productCatalog = {
-    'Khakhra': [
-      {'name': 'Plain Khakhra', 'price': 70.00},
-      {'name': 'Masala Khakhra', 'price': 80.00},
-      {'name': 'Methi Khakhra', 'price': 85.00},
-    ],
-  };
+  Map<String, List<Map<String, dynamic>>> productCatalog = {};
+  List<Map<String, dynamic>> rawProductList = [];
+  String? selectedCategory;
+  String? selectedProductName;
+  double selectedProductPrice = 0.0;
 
-  late String selectedCategory;
-  late String selectedProductName;
-  late double selectedProductPrice;
-
-  // Leave Management State
   final List<String> leaveTypes = [
     'Casual Leave',
     'Maternity Leave',
@@ -124,51 +122,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
   final TextEditingController _leaveReasonController = TextEditingController();
   DateTimeRange? _selectedLeaveDateRange;
 
-  final List<Map<String, String>> leaveHistory = [
-    {
-      'type': 'Casual Leave',
-      'dates': '12 Aug - 13 Aug 2026',
-      'reason': 'Personal Work',
-      'status': 'Approved'
-    },
-    {
-      'type': 'Sick Leave',
-      'dates': '02 Jul - 02 Jul 2026',
-      'reason': 'Fever & Rest',
-      'status': 'Approved'
-    },
-  ];
-
-  // Daily Log History
-  final List<Map<String, dynamic>> dailyTaskHistory = [
-    {
-      'firm': 'Shree Ji Decorators',
-      'mobile': '9876543210',
-      'pin': '364001',
-      'category': 'Khakhra',
-      'product': 'Plain Khakhra',
-      'price': 70.00,
-      'qty': 10,
-      'total': 700.00,
-      'time': '10:30 AM',
-      'status': 'Order Taken',
-    },
-  ];
-
-  // Hierarchy Chain Data with Proper Physical Addresses
+  List<Map<String, dynamic>> leaveHistory = [];
+  List<Map<String, dynamic>> dailyTaskHistory = [];
+  List<Map<String, dynamic>> attendanceHistory = [];
   List<HierarchyUserLocation> hierarchyData = [];
 
-  // Hierarchy Role Levels for Filter Logic
-  final List<String> roleHierarchyOrder = [
-    'Salesman',
-    'SO',
-    'ASM',
-    'RSM',
-    'ZSM',
-    'SalesHead'
-  ];
+  final List<String> roleHierarchyOrder = ['Salesman', 'SO', 'ASM', 'RSM', 'ZSM', 'SalesHead'];
 
-  // Role-based visibility mapping
   Map<String, List<String>> get roleVisibilityMap => {
     'Salesman': ['Salesman'],
     'SO': ['Salesman', 'SO'],
@@ -184,14 +144,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
     userRole = widget.loggedInRole;
     userId = widget.loggedInUserId;
     userName = widget.loggedInUserName;
+    userEmail = widget.email;
 
     _initializeHierarchyData();
     _clockStream = Stream.periodic(const Duration(seconds: 1), (_) => DateTime.now());
-    selectedCategory = productCatalog.keys.first;
-    selectedProductName = productCatalog[selectedCategory]!.first['name'] as String;
-    selectedProductPrice = (productCatalog[selectedCategory]!.first['price'] as num).toDouble();
 
     _initLiveGpsTracking();
+    _start1MinLocationTimer();
+
+    _fetchProductCatalog();
+    _fetchAttendanceStatus();
+    _fetchAttendanceHistory();
+    _fetchLeaveHistory();
+    _fetchDailyReports();
   }
 
   void _initializeHierarchyData() {
@@ -262,17 +227,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ),
     ];
 
-    // Find and update current user
     for (var item in hierarchyData) {
-      if (item.roleKey == userRole) {
-        item.isOnline = true;
-      }
+      if (item.roleKey == userRole) item.isOnline = true;
     }
   }
 
   @override
   void dispose() {
     _positionStreamSub?.cancel();
+    _minuteLocationTimer?.cancel();
     _faceDetector.close();
     _firmNameController.dispose();
     _mobileController.dispose();
@@ -282,7 +245,301 @@ class _DashboardScreenState extends State<DashboardScreen> {
     super.dispose();
   }
 
-  // Live Location & Reverse Geocoding Setup
+  Future<void> _launchWhatsApp() async {
+    final Uri waUrl = Uri.parse("https://wa.me/919512312400");
+    try {
+      final bool launched = await launchUrl(
+        waUrl,
+        mode: LaunchMode.externalApplication,
+      );
+      if (!launched && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Could not open WhatsApp application.")),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Error opening WhatsApp: $e")),
+        );
+      }
+    }
+  }
+
+  void _start1MinLocationTimer() {
+    _minuteLocationTimer?.cancel();
+    _minuteLocationTimer = Timer.periodic(const Duration(minutes: 1), (_) async {
+      await _fetchAndUpdateCurrentLocation();
+    });
+  }
+
+  Future<void> _fetchAndUpdateCurrentLocation() async {
+    try {
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) return;
+
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever) {
+        return;
+      }
+
+      Position pos = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+        timeLimit: const Duration(seconds: 10),
+      );
+      await _updateAddressFromPosition(pos);
+    } catch (e) {
+      debugPrint("1-minute location refresh error: $e");
+    }
+  }
+
+  Future<void> _fetchProductCatalog() async {
+    try {
+      final response = await http.get(Uri.parse("$baseUrl/catelog.php"));
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['status'] == true && data['data'] != null) {
+          rawProductList = List<Map<String, dynamic>>.from(data['data']);
+          Map<String, List<Map<String, dynamic>>> tempCatalog = {};
+
+          for (var item in rawProductList) {
+            String cat = item['category'] ?? 'General';
+            if (!tempCatalog.containsKey(cat)) {
+              tempCatalog[cat] = [];
+            }
+            tempCatalog[cat]!.add({
+              'id': item['id'],
+              'name': item['name'],
+              'price': double.tryParse(item['price'].toString()) ?? 0.0,
+              'sub_category': item['sub_category'] ?? ''
+            });
+          }
+
+          if (mounted) {
+            setState(() {
+              productCatalog = tempCatalog;
+              if (productCatalog.isNotEmpty) {
+                selectedCategory = productCatalog.keys.first;
+                if (productCatalog[selectedCategory]!.isNotEmpty) {
+                  selectedProductName = productCatalog[selectedCategory]!.first['name'];
+                  selectedProductPrice = productCatalog[selectedCategory]!.first['price'];
+                }
+              }
+            });
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint("Product Catalog API Error: $e");
+    }
+  }
+
+  Future<void> _fetchAttendanceStatus() async {
+    try {
+      final response = await http.get(Uri.parse("$baseUrl/get_attendance.php?emp_id=$userId"));
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['status'] == 'success' && data['attendance'] != null && mounted) {
+          setState(() {
+            isCheckedIn = data['attendance']['punch_type'] == 'PUNCH_IN';
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint("Attendance API Error: $e");
+    }
+  }
+
+  Future<void> _fetchAttendanceHistory() async {
+    try {
+      final response = await http.get(Uri.parse("$baseUrl/get_attendance_history.php?emp_id=$userId"));
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['status'] == 'success' && mounted) {
+          setState(() {
+            attendanceHistory = List<Map<String, dynamic>>.from(data['history'] ?? []);
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint("Attendance History API Error: $e");
+    }
+  }
+
+  Future<void> _submitPunchApi(File photoFile, String punchType) async {
+    try {
+      var request = http.MultipartRequest("POST", Uri.parse("$baseUrl/punch_attendance.php"));
+      request.fields['emp_id'] = userId;
+      request.fields['role'] = userRole;
+      request.fields['latitude'] = (currentLatitude ?? 0.0).toString();
+      request.fields['longitude'] = (currentLongitude ?? 0.0).toString();
+      request.fields['punch_type'] = punchType;
+
+      request.files.add(await http.MultipartFile.fromPath('photo', photoFile.path));
+
+      var streamedResponse = await request.send();
+      var response = await http.Response.fromStream(streamedResponse);
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['status'] == 'success') {
+          if (mounted) {
+            setState(() {
+              isCheckedIn = (punchType == 'PUNCH_IN');
+            });
+          }
+          _fetchAttendanceHistory();
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(backgroundColor: Colors.green, content: Text(data['message'] ?? 'Punch recorded!')),
+          );
+        } else {
+          throw Exception(data['message']);
+        }
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(backgroundColor: Colors.red, content: Text("Failed to submit punch: $e")),
+      );
+    }
+  }
+
+  Future<void> _fetchLeaveHistory() async {
+    try {
+      final response = await http.get(Uri.parse("$baseUrl/manage_leaves.php?emp_id=$userId"));
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['status'] == 'success' && mounted) {
+          setState(() {
+            leaveHistory = List<Map<String, dynamic>>.from(data['leaves']);
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint("Leave History API Error: $e");
+    }
+  }
+
+  Future<void> _submitLeaveApi(String type, String startDate, String endDate, String reason) async {
+    try {
+      final response = await http.post(
+        Uri.parse("$baseUrl/manage_leaves.php"),
+        body: {
+          'emp_id': userId,
+          'leave_type': type,
+          'start_date': startDate,
+          'end_date': endDate,
+          'reason': reason,
+        },
+      );
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['status'] == 'success') {
+          _fetchLeaveHistory();
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(backgroundColor: Colors.green, content: Text("Leave Application Submitted!")),
+          );
+        }
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(backgroundColor: Colors.red, content: Text("Failed to submit leave: $e")),
+      );
+    }
+  }
+
+  Future<void> _fetchDailyReports() async {
+    try {
+      final response = await http.get(Uri.parse("$baseUrl/manage_daily_reports.php?emp_id=$userId"));
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['status'] == 'success' && mounted) {
+          setState(() {
+            dailyTaskHistory = List<Map<String, dynamic>>.from(data['reports']);
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint("Daily Report API Error: $e");
+    }
+  }
+
+  Future<void> _submitDailyReportApi() async {
+    try {
+      final response = await http.post(
+        Uri.parse("$baseUrl/manage_daily_reports.php"),
+        body: {
+          'emp_id': userId,
+          'firm_name': _firmNameController.text,
+          'mobile': _mobileController.text,
+          'pin_code': _pinCodeController.text,
+          'category': selectedCategory ?? '',
+          'product_name': selectedProductName ?? '',
+          'price': selectedProductPrice.toString(),
+          'quantity': _qtyController.text,
+          'total_amount': calculatedTotal.toString(),
+          'latitude': (currentLatitude ?? 0.0).toString(),
+          'longitude': (currentLongitude ?? 0.0).toString(),
+          'address': currentLiveAddress ?? '',
+        },
+      );
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['status'] == 'success') {
+          _fetchDailyReports();
+          _firmNameController.clear();
+          _mobileController.clear();
+          _pinCodeController.clear();
+          _qtyController.text = '1';
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(backgroundColor: Colors.green, content: Text("Order recorded on server successfully!")),
+          );
+        }
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(backgroundColor: Colors.red, content: Text("Failed to save order: $e")),
+      );
+    }
+  }
+
+  Future<void> _changePasswordApi(String oldPassword, String newPassword) async {
+    try {
+      final response = await http.post(
+        Uri.parse("$baseUrl/change_password.php"),
+        headers: {"Content-Type": "application/json"},
+        body: json.encode({
+          'identifier': userId,
+          'old_password': oldPassword,
+          'new_password': newPassword,
+        }),
+      );
+
+      final data = json.decode(response.body);
+      if (data['status'] == true) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(backgroundColor: Colors.green, content: Text(data['message'] ?? 'Password updated successfully!')),
+        );
+      } else {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(backgroundColor: Colors.red, content: Text(data['message'] ?? 'Failed to update password.')),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(backgroundColor: Colors.red, content: Text("Password Change Error: $e")),
+      );
+    }
+  }
+
   Future<void> _initLiveGpsTracking() async {
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
@@ -291,30 +548,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
         currentLiveAddress = "Location services are OFF. Please enable GPS.";
         isGpsEnabled = false;
       });
-      _showPermissionSnackBar(
-        "Location services are turned off. Please enable GPS to fetch your live location.",
-        settingsLabel: "ENABLE",
-        onSettingsPressed: () => Geolocator.openLocationSettings(),
-      );
       return;
     }
 
-    setState(() => isGpsEnabled = true);
+    if (mounted) setState(() => isGpsEnabled = true);
 
     PermissionStatus permStatus = await Permission.locationWhenInUse.status;
     if (permStatus.isDenied) {
       permStatus = await Permission.locationWhenInUse.request();
-    }
-
-    if (permStatus.isPermanentlyDenied || permStatus.isRestricted) {
-      if (!mounted) return;
-      setState(() => currentLiveAddress = "Location permission denied. Enable it in app settings.");
-      _showPermissionSnackBar(
-        "Location permission is permanently denied. Please enable it from app settings.",
-        settingsLabel: "SETTINGS",
-        onSettingsPressed: () => openAppSettings(),
-      );
-      return;
     }
 
     if (!permStatus.isGranted) {
@@ -331,7 +572,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       await _updateAddressFromPosition(initialPosition);
     } catch (e) {
       if (mounted) {
-        setState(() => currentLiveAddress = "Unable to fetch current location. Retrying in background...");
+        setState(() => currentLiveAddress = "Unable to fetch GPS position.");
       }
     }
 
@@ -339,16 +580,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _positionStreamSub = Geolocator.getPositionStream(
       locationSettings: const LocationSettings(
         accuracy: LocationAccuracy.high,
-        distanceFilter: 10,
+        distanceFilter: 5,
       ),
-    ).listen(
-          (Position position) => _updateAddressFromPosition(position),
-      onError: (e) {
-        if (mounted) {
-          setState(() => currentLiveAddress = "Live location error: $e");
-        }
-      },
-    );
+    ).listen((Position position) => _updateAddressFromPosition(position));
   }
 
   Future<void> _updateAddressFromPosition(Position position) async {
@@ -361,12 +595,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
       if (placemarks.isNotEmpty) {
         Placemark place = placemarks.first;
-        final parts = [
-          place.street,
-          place.subLocality,
-          place.locality,
-          place.postalCode
-        ].where((p) => p != null && p.trim().isNotEmpty).toList();
+        final parts = [place.street, place.subLocality, place.locality, place.postalCode]
+            .where((p) => p != null && p.trim().isNotEmpty)
+            .toList();
         resolvedAddress = parts.isNotEmpty
             ? parts.join(', ')
             : "Lat: ${position.latitude.toStringAsFixed(4)}, Long: ${position.longitude.toStringAsFixed(4)}";
@@ -383,7 +614,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       currentLatitude = position.latitude;
       currentLongitude = position.longitude;
 
-      // Update current user's location in hierarchy
       for (var item in hierarchyData) {
         if (item.roleKey == userRole) {
           item.addressLocation = resolvedAddress;
@@ -395,35 +625,24 @@ class _DashboardScreenState extends State<DashboardScreen> {
     });
   }
 
-  void _showPermissionSnackBar(String message, {required String settingsLabel, required VoidCallback onSettingsPressed}) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        backgroundColor: Colors.red,
-        content: Text(message),
-        duration: const Duration(seconds: 6),
-        action: SnackBarAction(
-          label: settingsLabel,
-          textColor: Colors.white,
-          onPressed: onSettingsPressed,
-        ),
-      ),
-    );
-  }
-
   double get calculatedTotal {
     int qty = int.tryParse(_qtyController.text) ?? 0;
     return selectedProductPrice * qty;
   }
 
-  List<HierarchyUserLocation> getVisibleHierarchy() {
-    final visibleRoles = roleVisibilityMap[userRole] ?? [];
-    return hierarchyData.where((item) {
-      return visibleRoles.contains(item.roleKey);
-    }).toList();
+  double get totalMonthlySales {
+    double total = 0.0;
+    for (var report in dailyTaskHistory) {
+      total += double.tryParse(report['total_amount'].toString()) ?? 0.0;
+    }
+    return total;
   }
 
-  // Enhanced Face Detection with Smile and Features
+  List<HierarchyUserLocation> getVisibleHierarchy() {
+    final visibleRoles = roleVisibilityMap[userRole] ?? [];
+    return hierarchyData.where((item) => visibleRoles.contains(item.roleKey)).toList();
+  }
+
   Future<Map<String, dynamic>> _analyzeFace(File imageFile) async {
     final inputImage = InputImage.fromFile(imageFile);
     final List<Face> faces = await _faceDetector.processImage(inputImage);
@@ -434,7 +653,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     final face = faces.first;
     Map<String, dynamic> faceFeatures = {
-      'hasSmile': face.smilingProbability ?? 0.0 > 0.5,
+      'hasSmile': (face.smilingProbability ?? 0.0) > 0.5,
       'smileProbability': face.smilingProbability ?? 0.0,
       'leftEyeOpen': face.leftEyeOpenProbability ?? 0.0,
       'rightEyeOpen': face.rightEyeOpenProbability ?? 0.0,
@@ -443,8 +662,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
         'pitch': face.headEulerAngleX ?? 0.0,
         'roll': face.headEulerAngleZ ?? 0.0,
       },
-      'hasGlasses': false, // ML Kit doesn't directly detect glasses
-      'faceCount': faces.length,
     };
 
     return {'faces': faces, 'features': faceFeatures, 'message': 'Face detected successfully!'};
@@ -457,27 +674,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
         cameraStatus = await Permission.camera.request();
       }
 
-      if (cameraStatus.isPermanentlyDenied || cameraStatus.isRestricted) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            backgroundColor: Colors.red,
-            content: const Text("Camera permission is permanently denied. Please enable it from app settings."),
-            duration: const Duration(seconds: 6),
-            action: SnackBarAction(
-              label: "SETTINGS",
-              textColor: Colors.white,
-              onPressed: openAppSettings,
-            ),
-          ),
-        );
-        return;
-      }
-
       if (!cameraStatus.isGranted) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(backgroundColor: Colors.red, content: Text("Camera permission is required to punch in.")),
+          const SnackBar(backgroundColor: Colors.red, content: Text("Camera permission required")),
         );
         return;
       }
@@ -485,51 +685,27 @@ class _DashboardScreenState extends State<DashboardScreen> {
       final XFile? photo = await _picker.pickImage(
         source: ImageSource.camera,
         preferredCameraDevice: CameraDevice.front,
-        imageQuality: 85,
-        maxWidth: 1280,
-        maxHeight: 1280,
+        imageQuality: 80,
       );
 
-      if (photo == null) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Punch-in cancelled: no photo was captured.")),
-        );
-        return;
-      }
+      if (photo == null) return;
 
       File imageFile = File(photo.path);
-      if (!await imageFile.exists()) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            backgroundColor: Colors.red,
-            content: Text("Captured photo could not be read. Please try again."),
-          ),
-        );
-        return;
-      }
 
       if (!mounted) return;
       showDialog(
         context: context,
         barrierDismissible: false,
-        builder: (ctx) => const Center(
-          child: CircularProgressIndicator(color: _Palette.goldAccent),
-        ),
+        builder: (ctx) => const Center(child: CircularProgressIndicator(color: _Palette.goldAccent)),
       );
 
       final result = await _analyzeFace(imageFile);
-
       if (mounted) Navigator.pop(context);
 
       if (result['faces'].isEmpty) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            backgroundColor: Colors.red,
-            content: Text("Face detection failed! Ensure adequate lighting and align face inside camera."),
-          ),
+          const SnackBar(backgroundColor: Colors.red, content: Text("Face detection failed! Ensure face is clearly visible.")),
         );
         return;
       }
@@ -543,13 +719,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
           title: Row(
             children: [
-              Icon(features['hasSmile'] ? Icons.emoji_emotions : Icons.face,
-                  color: features['hasSmile'] ? Colors.green : Colors.orange),
+              Icon(features['hasSmile'] ? Icons.emoji_emotions : Icons.face, color: features['hasSmile'] ? Colors.green : Colors.orange),
               const SizedBox(width: 8),
-              Text(
-                features['hasSmile'] ? "Face Verified with Smile!" : "Face Verified!",
-                style: const TextStyle(color: _Palette.inkDark, fontWeight: FontWeight.bold),
-              ),
+              Text(features['hasSmile'] ? "Face Verified with Smile!" : "Face Verified!"),
             ],
           ),
           content: SingleChildScrollView(
@@ -561,115 +733,255 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   child: Image.file(imageFile, height: 180, width: double.infinity, fit: BoxFit.cover),
                 ),
                 const SizedBox(height: 12),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: _Palette.cardHeaderBg,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(Icons.sentiment_satisfied, color: features['hasSmile'] ? Colors.green : Colors.grey),
-                          const SizedBox(width: 8),
-                          Text(
-                            features['hasSmile'] ? "😊 Smiling! (${(features['smileProbability'] * 100).toStringAsFixed(0)}%)" : "😐 Not Smiling",
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              color: features['hasSmile'] ? Colors.green : Colors.grey,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 6),
-                      Row(
-                        children: [
-                          Icon(Icons.visibility, color: Colors.blue),
-                          const SizedBox(width: 8),
-                          Text(
-                            "Eyes: ${features['leftEyeOpen'] > 0.5 ? '👁️ Open' : '🔒 Closed'} / ${features['rightEyeOpen'] > 0.5 ? '👁️ Open' : '🔒 Closed'}",
-                            style: const TextStyle(fontWeight: FontWeight.w500),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 6),
-                      Row(
-                        children: [
-                          Icon(Icons.rotate_right, color: Colors.purple),
-                          const SizedBox(width: 8),
-                          Text(
-                            "Head: Yaw ${features['headAngle']['yaw'].toStringAsFixed(1)}°",
-                            style: const TextStyle(fontWeight: FontWeight.w500),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 6),
-                      Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: Colors.green.shade50,
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(Icons.location_on, color: Colors.red.shade700, size: 16),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                currentLiveAddress ?? "Location not available",
-                                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+                Text("Address: ${currentLiveAddress ?? 'N/A'}", style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
               ],
             ),
           ),
           actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text("Cancel", style: TextStyle(color: Colors.grey)),
-            ),
-            ElevatedButton.icon(
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Cancel")),
+            ElevatedButton(
               style: ElevatedButton.styleFrom(backgroundColor: _Palette.primaryBrown),
-              icon: const Icon(Icons.check_circle, color: _Palette.goldLight, size: 18),
-              label: Text(
-                isCheckedIn ? "Confirm Punch Out" : "Confirm Punch In",
-                style: const TextStyle(color: _Palette.goldLight),
-              ),
-              onPressed: () {
+              onPressed: () async {
                 Navigator.pop(ctx);
-                setState(() => isCheckedIn = !isCheckedIn);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    backgroundColor: _Palette.primaryBrown,
-                    content: Text(
-                      isCheckedIn
-                          ? "Punch In recorded! ${features['hasSmile'] ? '😊' : '😐'}"
-                          : "Punch Out successful!",
-                    ),
-                  ),
-                );
+                final nextPunchType = isCheckedIn ? 'PUNCH_OUT' : 'PUNCH_IN';
+                await _submitPunchApi(imageFile, nextPunchType);
               },
+              child: Text(isCheckedIn ? "Confirm Punch Out" : "Confirm Punch In", style: const TextStyle(color: _Palette.goldLight)),
             )
           ],
         ),
       );
     } catch (e) {
       if (mounted && Navigator.canPop(context)) Navigator.pop(context);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Error processing selfie: $e")),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Selfie Error: $e")));
     }
   }
 
-  // Role-based Location Card Widget
+  void _showChangePasswordDialog() {
+    final oldPassController = TextEditingController();
+    final newPassController = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _Palette.cardBg,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: const Text("Change Password", style: TextStyle(color: _Palette.inkDark, fontWeight: FontWeight.bold)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: oldPassController,
+              obscureText: true,
+              decoration: const InputDecoration(labelText: 'Current Password', border: OutlineInputBorder()),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: newPassController,
+              obscureText: true,
+              decoration: const InputDecoration(labelText: 'New Password', border: OutlineInputBorder()),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Cancel")),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: _Palette.primaryBrown),
+            onPressed: () {
+              if (oldPassController.text.isNotEmpty && newPassController.text.length >= 4) {
+                Navigator.pop(ctx);
+                _changePasswordApi(oldPassController.text, newPassController.text);
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("New password must be at least 4 characters")),
+                );
+              }
+            },
+            child: const Text("Update", style: TextStyle(color: Colors.white)),
+          )
+        ],
+      ),
+    );
+  }
+
+  void _showPersonalInfoModal() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        padding: const EdgeInsets.all(20),
+        decoration: const BoxDecoration(
+          color: _Palette.cardBg,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text("Personal Information", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _Palette.inkDark)),
+            const Divider(),
+            ListTile(
+              leading: const Icon(Icons.badge, color: _Palette.primaryBrown),
+              title: const Text("Employee ID"),
+              subtitle: Text(userId, style: const TextStyle(fontWeight: FontWeight.bold)),
+            ),
+            ListTile(
+              leading: const Icon(Icons.person, color: _Palette.primaryBrown),
+              title: const Text("Full Name"),
+              subtitle: Text(userName, style: const TextStyle(fontWeight: FontWeight.bold)),
+            ),
+            ListTile(
+              leading: const Icon(Icons.email, color: _Palette.primaryBrown),
+              title: const Text("Email Address"),
+              subtitle: Text(userEmail, style: const TextStyle(fontWeight: FontWeight.bold)),
+            ),
+            ListTile(
+              leading: const Icon(Icons.work, color: _Palette.primaryBrown),
+              title: const Text("Assigned Designation"),
+              subtitle: Text(userRole, style: const TextStyle(fontWeight: FontWeight.bold)),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(backgroundColor: _Palette.primaryBrown),
+                icon: const Icon(Icons.lock_reset, color: Colors.white),
+                label: const Text("Change Password", style: TextStyle(color: Colors.white)),
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  _showChangePasswordDialog();
+                },
+              ),
+            )
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showProductCatalogModal() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        height: MediaQuery.of(context).size.height * 0.75,
+        padding: const EdgeInsets.all(20),
+        decoration: const BoxDecoration(
+          color: _Palette.bgWarm,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text("Product Catalog", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _Palette.inkDark)),
+            const Divider(),
+            Expanded(
+              child: rawProductList.isEmpty
+                  ? const Center(child: Text("No products found in catalog."))
+                  : ListView.builder(
+                itemCount: rawProductList.length,
+                itemBuilder: (ctx, idx) {
+                  final item = rawProductList[idx];
+                  return Card(
+                    color: _Palette.cardBg,
+                    margin: const EdgeInsets.symmetric(vertical: 6),
+                    child: ListTile(
+                      leading: const CircleAvatar(
+                        backgroundColor: _Palette.cardHeaderBg,
+                        child: Icon(Icons.inventory_2, color: _Palette.primaryBrown),
+                      ),
+                      title: Text(item['name'] ?? '', style: const TextStyle(fontWeight: FontWeight.bold)),
+                      subtitle: Text("Category: ${item['category']} | Sub: ${item['sub_category'] ?? 'N/A'}"),
+                      trailing: Text("₹${item['price']}", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.green, fontSize: 15)),
+                    ),
+                  );
+                },
+              ),
+            )
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showAttendanceHistoryModal() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _Palette.cardBg,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text("Attendance Logs", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: attendanceHistory.isEmpty
+              ? const Padding(padding: EdgeInsets.all(20.0), child: Text("No attendance records found.", textAlign: TextAlign.center))
+              : ListView.separated(
+            shrinkWrap: true,
+            itemCount: attendanceHistory.length,
+            separatorBuilder: (_, __) => const Divider(),
+            itemBuilder: (ctx, idx) {
+              final item = attendanceHistory[idx];
+              final punchType = item['punch_type'] ?? 'PUNCH_IN';
+              return ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(
+                  punchType == 'PUNCH_IN' ? Icons.login : Icons.logout,
+                  color: punchType == 'PUNCH_IN' ? Colors.green : Colors.red,
+                ),
+                title: Text(punchType == 'PUNCH_IN' ? "Punch In" : "Punch Out", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                subtitle: Text("${item['created_at'] ?? 'N/A'}\n${item['address'] ?? 'N/A'}"),
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Close")),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTopSummaryCard() {
+    return Container(
+      margin: const EdgeInsets.only(top: 12),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: _Palette.cardHeaderBg,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _Palette.border),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceAround,
+        children: [
+          Column(
+            children: [
+              const Text("Monthly Sales", style: TextStyle(fontSize: 11, color: _Palette.inkDark)),
+              const SizedBox(height: 4),
+              Text("₹${totalMonthlySales.toStringAsFixed(0)}", style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.green)),
+            ],
+          ),
+          Container(height: 30, width: 1, color: _Palette.border),
+          Column(
+            children: [
+              const Text("Daily Reports", style: TextStyle(fontSize: 11, color: _Palette.inkDark)),
+              const SizedBox(height: 4),
+              Text("${dailyTaskHistory.length}", style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: _Palette.primaryBrown)),
+            ],
+          ),
+          Container(height: 30, width: 1, color: _Palette.border),
+          Column(
+            children: [
+              const Text("Visits Count", style: TextStyle(fontSize: 11, color: _Palette.inkDark)),
+              const SizedBox(height: 4),
+              Text("${getVisibleHierarchy().length}", style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.blueAccent)),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildRoleBasedLocationCard() {
     final visibleList = getVisibleHierarchy();
 
@@ -685,26 +997,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
         children: [
           Row(
             children: [
-              Container(
-                padding: const EdgeInsets.all(6),
-                decoration: const BoxDecoration(
-                  color: Color(0xFFFDE8E8),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(Icons.my_location, color: Colors.redAccent, size: 20),
-              ),
+              const Icon(Icons.my_location, color: Colors.redAccent, size: 20),
               const SizedBox(width: 10),
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    "Live Location Tracking",
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: _Palette.inkDark),
-                  ),
-                  Text(
-                    "Role: $userRole • ${visibleList.length} members visible",
-                    style: const TextStyle(fontSize: 11, color: Colors.grey),
-                  ),
+                  const Text("Live Location Tracking", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: _Palette.inkDark)),
+                  Text("Role: $userRole • ${visibleList.length} members visible", style: const TextStyle(fontSize: 11, color: Colors.grey)),
                 ],
               ),
               const Spacer(),
@@ -717,46 +1016,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ),
                 child: Text(
                   isGpsEnabled ? "GPS ON" : "GPS OFF",
-                  style: TextStyle(
-                    fontSize: 10,
-                    color: isGpsEnabled ? Colors.green.shade800 : Colors.red.shade800,
-                    fontWeight: FontWeight.bold,
-                  ),
+                  style: TextStyle(fontSize: 10, color: isGpsEnabled ? Colors.green.shade800 : Colors.red.shade800, fontWeight: FontWeight.bold),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 12),
-          if (currentLiveAddress != null && userRole == 'Salesman')
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.blue.shade50,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.blue.shade200),
-              ),
-              child: Row(
-                children: [
-                  Icon(Icons.my_location, color: Colors.blue.shade700, size: 18),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          "📍 My Live Location",
-                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
-                        ),
-                        Text(
-                          currentLiveAddress!,
-                          style: TextStyle(fontSize: 11, color: Colors.blue.shade900),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
           const SizedBox(height: 12),
           ListView.builder(
             shrinkWrap: true,
@@ -765,461 +1029,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
             itemBuilder: (context, index) {
               final item = visibleList[index];
               final isCurrentUser = item.roleKey == userRole;
-              final isLast = index == visibleList.length - 1;
 
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: isCurrentUser ? Colors.blue.shade50 : Colors.transparent,
-                      borderRadius: BorderRadius.circular(12),
-                      border: isCurrentUser ? Border.all(color: Colors.blue.shade300) : null,
-                    ),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Stack(
-                          children: [
-                            CircleAvatar(
-                              radius: 16,
-                              backgroundColor: item.themeColor,
-                              child: Text(
-                                item.roleKey.substring(0, 1),
-                                style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
-                              ),
-                            ),
-                            if (item.isOnline)
-                              Positioned(
-                                bottom: 0,
-                                right: 0,
-                                child: Container(
-                                  width: 10,
-                                  height: 10,
-                                  decoration: const BoxDecoration(
-                                    color: Colors.green,
-                                    shape: BoxShape.circle,
-                                    border: Border.fromBorderSide(BorderSide(color: Colors.white, width: 2)),
-                                  ),
-                                ),
-                              ),
-                          ],
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  Text(
-                                    item.roleTitle,
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 13,
-                                      color: _Palette.inkDark,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 6),
-                                  Text(
-                                    item.name,
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: item.themeColor,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                  if (isCurrentUser)
-                                    Container(
-                                      margin: const EdgeInsets.only(left: 6),
-                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                      decoration: BoxDecoration(
-                                        color: Colors.blue,
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                      child: const Text(
-                                        "YOU",
-                                        style: TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 8,
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                                    ),
-                                ],
-                              ),
-                              const SizedBox(height: 2),
-                              Row(
-                                children: [
-                                  Icon(
-                                    Icons.location_on,
-                                    color: isCurrentUser ? Colors.blue.shade700 : Colors.grey.shade600,
-                                    size: 14,
-                                  ),
-                                  const SizedBox(width: 4),
-                                  Expanded(
-                                    child: Text(
-                                      item.addressLocation,
-                                      style: TextStyle(
-                                        fontSize: 11,
-                                        color: isCurrentUser ? Colors.blue.shade900 : _Palette.inkDark,
-                                        fontWeight: isCurrentUser ? FontWeight.w600 : FontWeight.w400,
-                                      ),
-                                      maxLines: 2,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              if (item.latitude != null && item.longitude != null)
-                                Padding(
-                                  padding: const EdgeInsets.only(top: 2),
-                                  child: Text(
-                                    "📍 ${item.latitude!.toStringAsFixed(4)}, ${item.longitude!.toStringAsFixed(4)}",
-                                    style: TextStyle(
-                                      fontSize: 9,
-                                      color: Colors.grey.shade500,
-                                    ),
-                                  ),
-                                ),
-                            ],
-                          ),
-                        ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                          decoration: BoxDecoration(
-                            color: item.isOnline ? Colors.green.shade50 : Colors.red.shade50,
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(
-                              color: item.isOnline ? Colors.green.shade400 : Colors.red.shade400,
-                            ),
-                          ),
-                          child: Text(
-                            item.isOnline ? "● Live" : "○ Offline",
-                            style: TextStyle(
-                              fontSize: 8,
-                              color: item.isOnline ? Colors.green.shade800 : Colors.red.shade800,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  if (!isLast)
-                    Container(
-                      margin: const EdgeInsets.only(left: 20),
-                      height: 4,
-                      width: 2,
-                      color: Colors.grey.shade300,
-                    ),
-                ],
+              return ListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                leading: CircleAvatar(
+                  radius: 14,
+                  backgroundColor: item.themeColor,
+                  child: Text(item.roleKey.substring(0, 1), style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                ),
+                title: Text("${item.roleTitle} - ${item.name}", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                subtitle: Text(isCurrentUser && currentLiveAddress != null ? currentLiveAddress! : item.addressLocation, maxLines: 2),
+                trailing: Text(item.isOnline ? "Live" : "Offline", style: TextStyle(color: item.isOnline ? Colors.green : Colors.red, fontSize: 10, fontWeight: FontWeight.bold)),
               );
             },
           ),
         ],
-      ),
-    );
-  }
-
-  void viewProductCatalog() {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => Container(
-        height: MediaQuery.of(context).size.height * 0.75,
-        decoration: const BoxDecoration(
-          color: _Palette.bgWarm,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-        ),
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Center(
-              child: Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(color: Colors.grey.shade400, borderRadius: BorderRadius.circular(2)),
-              ),
-            ),
-            const SizedBox(height: 16),
-            const Row(
-              children: [
-                Icon(Icons.menu_book, color: _Palette.primaryBrown, size: 24),
-                SizedBox(width: 10),
-                Text(
-                  "Product Catalog & Pricing",
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _Palette.inkDark),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            const Divider(),
-            Expanded(
-              child: ListView.builder(
-                itemCount: productCatalog.keys.length,
-                itemBuilder: (context, index) {
-                  String category = productCatalog.keys.elementAt(index);
-                  List<Map<String, dynamic>> items = productCatalog[category]!;
-
-                  return Container(
-                    margin: const EdgeInsets.only(bottom: 16),
-                    decoration: BoxDecoration(
-                      color: _Palette.cardBg,
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: _Palette.border),
-                    ),
-                    child: ExpansionTile(
-                      initiallyExpanded: index == 0,
-                      iconColor: _Palette.primaryBrown,
-                      title: Text(
-                        category,
-                        style: const TextStyle(fontWeight: FontWeight.bold, color: _Palette.inkDark, fontSize: 15),
-                      ),
-                      children: items.map((item) {
-                        return ListTile(
-                          dense: true,
-                          leading: const Icon(Icons.inventory_2_outlined, color: _Palette.primaryBrown, size: 18),
-                          title: Text(item['name'], style: const TextStyle(fontWeight: FontWeight.w600, color: _Palette.inkDark)),
-                          trailing: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: _Palette.cardHeaderBg,
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Text(
-                              "₹${item['price']}",
-                              style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.green),
-                            ),
-                          ),
-                        );
-                      }).toList(),
-                    ),
-                  );
-                },
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _showPersonalDetailsModal() {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => Container(
-        decoration: const BoxDecoration(
-          color: _Palette.bgWarm,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-        ),
-        padding: const EdgeInsets.all(20),
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Center(
-                child: Container(
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(color: Colors.grey.shade400, borderRadius: BorderRadius.circular(2)),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  const CircleAvatar(
-                    radius: 32,
-                    backgroundColor: _Palette.goldLight,
-                    child: Icon(Icons.person, size: 42, color: _Palette.primaryBrown),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(userName, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: _Palette.inkDark)),
-                        const SizedBox(height: 2),
-                        Text("Role: $userRole ($userId)", style: const TextStyle(fontSize: 13, color: _Palette.primaryBrown, fontWeight: FontWeight.bold)),
-                      ],
-                    ),
-                  )
-                ],
-              ),
-              const Divider(height: 24),
-              const Text("Personal & Contact Information", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: _Palette.inkDark)),
-              const SizedBox(height: 10),
-              _buildProfileInfoRow(Icons.phone, "Phone Number", "+91 98765 43210"),
-              _buildProfileInfoRow(Icons.email, "Email Address", "user@decor.com"),
-              _buildProfileInfoRow(Icons.alt_route, "Assigned Route", "Shastrinagar ➔ Nari Chawkdi ➔ Waghawadi road"),
-              _buildProfileInfoRow(Icons.supervisor_account, "Reporting Officer", "Amit Shah (BHFSO-01)"),
-              _buildProfileInfoRow(Icons.calendar_month, "Date of Joining", "15 Jan 2024"),
-              const Divider(height: 24),
-              ListTile(
-                tileColor: _Palette.cardBg,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: const BorderSide(color: _Palette.border)),
-                leading: const Icon(Icons.menu_book, color: _Palette.primaryBrown),
-                title: const Text("View Product Catalogs", style: TextStyle(fontWeight: FontWeight.w600, color: _Palette.inkDark)),
-                subtitle: const Text("Explore available products & prices"),
-                trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.grey),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  viewProductCatalog();
-                },
-              ),
-              const SizedBox(height: 12),
-              ListTile(
-                tileColor: _Palette.cardBg,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: const BorderSide(color: _Palette.border)),
-                leading: const Icon(Icons.lock_reset, color: _Palette.primaryBrown),
-                title: const Text("Change Password", style: TextStyle(fontWeight: FontWeight.w600, color: _Palette.inkDark)),
-                trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.grey),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  _showChangePasswordModal();
-                },
-              ),
-              const SizedBox(height: 16),
-              SizedBox(
-                width: double.infinity,
-                height: 48,
-                child: ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.red.shade700,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                  ),
-                  icon: const Icon(Icons.logout, color: Colors.white, size: 20),
-                  label: const Text("Logout", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
-                  onPressed: () {
-                    Navigator.push(context, MaterialPageRoute(builder: (ctx) => Login()));
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text("Logged out successfully!")),
-                    );
-                  },
-                ),
-              ),
-              const SizedBox(height: 16),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _showChangePasswordModal() {
-    final oldController = TextEditingController();
-    final newController = TextEditingController();
-    final confirmController = TextEditingController();
-    bool hideOld = true;
-    bool hideNew = true;
-
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => StatefulBuilder(
-        builder: (context, setModalState) {
-          return Container(
-            decoration: const BoxDecoration(
-              color: _Palette.cardBg,
-              borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-            ),
-            padding: EdgeInsets.only(
-              top: 20,
-              left: 20,
-              right: 20,
-              bottom: MediaQuery.of(context).viewInsets.bottom + 20,
-            ),
-            child: SingleChildScrollView(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Center(
-                    child: Container(
-                      width: 40,
-                      height: 4,
-                      decoration: BoxDecoration(color: Colors.grey.shade400, borderRadius: BorderRadius.circular(2)),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  const Row(
-                    children: [
-                      Icon(Icons.lock_reset, color: _Palette.primaryBrown),
-                      SizedBox(width: 8),
-                      Text("Change Password", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _Palette.inkDark)),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: oldController,
-                    obscureText: hideOld,
-                    decoration: InputDecoration(
-                      labelText: "Current Password",
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                      suffixIcon: IconButton(
-                        icon: Icon(hideOld ? Icons.visibility_off : Icons.visibility),
-                        onPressed: () => setModalState(() => hideOld = !hideOld),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: newController,
-                    obscureText: hideNew,
-                    decoration: InputDecoration(
-                      labelText: "New Password",
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                      suffixIcon: IconButton(
-                        icon: Icon(hideNew ? Icons.visibility_off : Icons.visibility),
-                        onPressed: () => setModalState(() => hideNew = !hideNew),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: confirmController,
-                    obscureText: hideNew,
-                    decoration: InputDecoration(
-                      labelText: "Confirm New Password",
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 48,
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: _Palette.primaryBrown,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      ),
-                      onPressed: () {
-                        if (newController.text.isNotEmpty && newController.text == confirmController.text) {
-                          Navigator.pop(ctx);
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text("Password changed successfully!")),
-                          );
-                        } else {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text("Passwords do not match!")),
-                          );
-                        }
-                      },
-                      child: const Text("Update Password", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                    ),
-                  )
-                ],
-              ),
-            ),
-          );
-        },
       ),
     );
   }
@@ -1234,163 +1059,73 @@ class _DashboardScreenState extends State<DashboardScreen> {
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
             child: Padding(
               padding: const EdgeInsets.all(20.0),
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Row(
-                      children: [
-                        Icon(Icons.assignment_late, color: Colors.redAccent, size: 22),
-                        SizedBox(width: 8),
-                        Text("Absence Request", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-                      ],
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text("Absence Request", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 12),
+                  DropdownButton<String>(
+                    value: selectedLeaveType,
+                    dropdownColor: _Palette.darkInputBg,
+                    isExpanded: true,
+                    style: const TextStyle(color: Colors.white),
+                    items: leaveTypes.map((type) => DropdownMenuItem(value: type, child: Text(type))).toList(),
+                    onChanged: (val) {
+                      if (val != null) setDialogState(() => selectedLeaveType = val);
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(backgroundColor: _Palette.darkInputBg),
+                    icon: const Icon(Icons.calendar_today, color: Colors.redAccent, size: 16),
+                    label: Text(
+                      _selectedLeaveDateRange == null
+                          ? "Select Date Range"
+                          : "${_selectedLeaveDateRange!.start.year}-${_selectedLeaveDateRange!.start.month}-${_selectedLeaveDateRange!.start.day} to ${_selectedLeaveDateRange!.end.year}-${_selectedLeaveDateRange!.end.month}-${_selectedLeaveDateRange!.end.day}",
+                      style: const TextStyle(color: Colors.white, fontSize: 12),
                     ),
-                    const SizedBox(height: 16),
-                    Center(
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Text(
-                          "Employee ID: $userId",
-                          style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w500),
-                        ),
-                      ),
+                    onPressed: () async {
+                      final picked = await showDateRangePicker(
+                        context: context,
+                        firstDate: DateTime.now(),
+                        lastDate: DateTime.now().add(const Duration(days: 90)),
+                      );
+                      if (picked != null) setDialogState(() => _selectedLeaveDateRange = picked);
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _leaveReasonController,
+                    style: const TextStyle(color: Colors.white),
+                    decoration: const InputDecoration(
+                      hintText: "Reason for Leave",
+                      hintStyle: TextStyle(color: Colors.white38),
                     ),
-                    const SizedBox(height: 16),
-                    const Text("Type of Leave", style: TextStyle(color: Colors.redAccent, fontSize: 13, fontWeight: FontWeight.w600)),
-                    const SizedBox(height: 6),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                      decoration: BoxDecoration(
-                        color: _Palette.darkInputBg,
-                        borderRadius: BorderRadius.circular(12),
+                  ),
+                  const SizedBox(height: 20),
+                  Row(
+                    children: [
+                      TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Cancel")),
+                      const Spacer(),
+                      ElevatedButton(
+                        style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFFF6B6B)),
+                        onPressed: () {
+                          if (_selectedLeaveDateRange != null && _leaveReasonController.text.isNotEmpty) {
+                            String start = "${_selectedLeaveDateRange!.start.year}-${_selectedLeaveDateRange!.start.month.toString().padLeft(2, '0')}-${_selectedLeaveDateRange!.start.day.toString().padLeft(2, '0')}";
+                            String end = "${_selectedLeaveDateRange!.end.year}-${_selectedLeaveDateRange!.end.month.toString().padLeft(2, '0')}-${_selectedLeaveDateRange!.end.day.toString().padLeft(2, '0')}";
+
+                            _submitLeaveApi(selectedLeaveType, start, end, _leaveReasonController.text);
+                            _leaveReasonController.clear();
+                            _selectedLeaveDateRange = null;
+                            Navigator.pop(ctx);
+                          }
+                        },
+                        child: const Text("Submit", style: TextStyle(color: Colors.white)),
                       ),
-                      child: DropdownButtonHideUnderline(
-                        child: DropdownButton<String>(
-                          value: selectedLeaveType,
-                          dropdownColor: _Palette.darkInputBg,
-                          isExpanded: true,
-                          style: const TextStyle(color: Colors.white, fontSize: 14),
-                          items: leaveTypes.map((type) {
-                            return DropdownMenuItem(value: type, child: Text("• $type"));
-                          }).toList(),
-                          onChanged: (val) {
-                            if (val != null) setDialogState(() => selectedLeaveType = val);
-                          },
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    const Text("From Date to End Date", style: TextStyle(color: Colors.redAccent, fontSize: 13, fontWeight: FontWeight.w600)),
-                    const SizedBox(height: 6),
-                    InkWell(
-                      onTap: () async {
-                        final picked = await showDateRangePicker(
-                          context: context,
-                          firstDate: DateTime.now(),
-                          lastDate: DateTime.now().add(const Duration(days: 90)),
-                        );
-                        if (picked != null) {
-                          setDialogState(() => _selectedLeaveDateRange = picked);
-                        }
-                      },
-                      child: Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(14),
-                        decoration: BoxDecoration(
-                          color: _Palette.darkInputBg,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: Colors.white24),
-                        ),
-                        child: Row(
-                          children: [
-                            const Icon(Icons.calendar_today, color: Colors.redAccent, size: 20),
-                            const SizedBox(width: 12),
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  _selectedLeaveDateRange == null
-                                      ? "Select Start Date"
-                                      : "${_selectedLeaveDateRange!.start.day}/${_selectedLeaveDateRange!.start.month}/${_selectedLeaveDateRange!.start.year}",
-                                  style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
-                                ),
-                                Text(
-                                  _selectedLeaveDateRange == null
-                                      ? "to End Date"
-                                      : "to ${_selectedLeaveDateRange!.end.day}/${_selectedLeaveDateRange!.end.month}/${_selectedLeaveDateRange!.end.year}",
-                                  style: const TextStyle(color: Colors.white54, fontSize: 12),
-                                ),
-                              ],
-                            )
-                          ],
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    const Text("Reason For Leave", style: TextStyle(color: Colors.redAccent, fontSize: 13, fontWeight: FontWeight.w600)),
-                    const SizedBox(height: 6),
-                    TextField(
-                      controller: _leaveReasonController,
-                      style: const TextStyle(color: Colors.white),
-                      maxLines: 2,
-                      decoration: InputDecoration(
-                        hintText: "Enter reason for leave",
-                        hintStyle: const TextStyle(color: Colors.white38, fontSize: 13),
-                        filled: true,
-                        fillColor: _Palette.darkInputBg,
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: OutlinedButton(
-                            style: OutlinedButton.styleFrom(
-                              side: const BorderSide(color: Colors.white38),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                            ),
-                            onPressed: () => Navigator.pop(ctx),
-                            child: const Text("Cancel", style: TextStyle(color: Colors.white)),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: ElevatedButton(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFFFF6B6B),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                            ),
-                            onPressed: () {
-                              if (_selectedLeaveDateRange != null && _leaveReasonController.text.isNotEmpty) {
-                                setState(() {
-                                  leaveHistory.insert(0, {
-                                    'type': selectedLeaveType,
-                                    'dates': "${_selectedLeaveDateRange!.start.day}/${_selectedLeaveDateRange!.start.month} - ${_selectedLeaveDateRange!.end.day}/${_selectedLeaveDateRange!.end.month}",
-                                    'reason': _leaveReasonController.text,
-                                    'status': 'Pending'
-                                  });
-                                  _leaveReasonController.clear();
-                                  _selectedLeaveDateRange = null;
-                                });
-                                Navigator.pop(ctx);
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text("Leave Application Submitted!")),
-                                );
-                              }
-                            },
-                            child: const Text("Submit", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                          ),
-                        ),
-                      ],
-                    )
-                  ],
-                ),
+                    ],
+                  )
+                ],
               ),
             ),
           );
@@ -1412,17 +1147,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text("Leave History Logs", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _Palette.inkDark)),
-                Icon(Icons.history_edu, color: _Palette.primaryBrown),
-              ],
-            ),
+            const Text("Leave History Logs", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _Palette.inkDark)),
             const Divider(),
             Expanded(
               child: leaveHistory.isEmpty
-                  ? const Center(child: Text("No leave history available"))
+                  ? const Center(child: Text("No leave history found"))
                   : ListView.builder(
                 itemCount: leaveHistory.length,
                 itemBuilder: (ctx, idx) {
@@ -1430,25 +1159,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   return Card(
                     color: _Palette.cardBg,
                     margin: const EdgeInsets.symmetric(vertical: 6),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     child: ListTile(
-                      title: Text(item['type']!, style: const TextStyle(fontWeight: FontWeight.bold, color: _Palette.inkDark)),
-                      subtitle: Text("${item['dates']}\nReason: ${item['reason']}"),
-                      trailing: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: item['status'] == 'Approved' ? Colors.green.shade100 : Colors.orange.shade100,
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Text(
-                          item['status']!,
-                          style: TextStyle(
-                            color: item['status'] == 'Approved' ? Colors.green.shade800 : Colors.orange.shade900,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ),
+                      title: Text(item['leave_type'] ?? '', style: const TextStyle(fontWeight: FontWeight.bold)),
+                      subtitle: Text("${item['start_date']} to ${item['end_date']}\nReason: ${item['reason']}"),
+                      trailing: Text(item['status'] ?? 'Pending', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.orange)),
                     ),
                   );
                 },
@@ -1466,13 +1180,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       builder: (ctx) => AlertDialog(
         backgroundColor: _Palette.cardBg,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Row(
-          children: [
-            Icon(Icons.assignment_outlined, color: _Palette.primaryBrown),
-            SizedBox(width: 8),
-            Text("Daily Order Logs", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _Palette.inkDark)),
-          ],
-        ),
+        title: const Text("Daily Order Logs", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
         content: SizedBox(
           width: double.maxFinite,
           child: dailyTaskHistory.isEmpty
@@ -1485,25 +1193,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
               final item = dailyTaskHistory[idx];
               return ListTile(
                 contentPadding: EdgeInsets.zero,
-                title: Text(item['firm']!, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                subtitle: Text("${item['category']} • ${item['product']}\nMob: ${item['mobile'] ?? 'N/A'} | PIN: ${item['pin'] ?? 'N/A'}\nQty: ${item['qty']} × ₹${item['price']}"),
-                trailing: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Text("₹${item['total']}", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.green, fontSize: 13)),
-                    Text(item['time']!, style: const TextStyle(fontSize: 11, color: Colors.grey)),
-                  ],
-                ),
+                title: Text(item['firm_name'] ?? '', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                subtitle: Text("${item['category']} • ${item['product_name']}\nQty: ${item['quantity']} × ₹${item['price']}"),
+                trailing: Text("₹${item['total_amount']}", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.green)),
               );
             },
           ),
         ),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text("Close", style: TextStyle(color: _Palette.primaryBrown, fontWeight: FontWeight.bold)),
-          )
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Close")),
         ],
       ),
     );
@@ -1513,355 +1211,278 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: _Palette.bgWarm,
-      body: SafeArea(
-        child: SingleChildScrollView(
-          child: Column(
-            children: [
-              // Header
-              Container(
-                padding: const EdgeInsets.all(20),
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [_Palette.darkHeaderTop, _Palette.darkHeaderBottom],
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                  ),
-                  borderRadius: BorderRadius.vertical(bottom: Radius.circular(28)),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _launchWhatsApp,
+        backgroundColor: _Palette.whatsappGreen,
+        shape: const CircleBorder(),
+        child: const Icon(Icons.chat, color: Colors.white, size: 28),
+      ),
+      body: SingleChildScrollView(
+        child: Column(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(20),
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [_Palette.darkHeaderTop, _Palette.darkHeaderBottom],
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
                 ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text("$userRole Dashboard", style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.white)),
-                        IconButton(
-                          icon: const Icon(Icons.manage_accounts, color: Colors.white),
-                          onPressed: _showPersonalDetailsModal,
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        InkWell(
-                          borderRadius: BorderRadius.circular(32),
-                          onTap: _showPersonalDetailsModal,
-                          child: const CircleAvatar(
-                            radius: 32,
-                            backgroundColor: _Palette.goldLight,
-                            child: Icon(Icons.person, size: 42, color: _Palette.primaryBrown),
-                          ),
-                        ),
-                        const SizedBox(width: 14),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(userName, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white)),
-                              const SizedBox(height: 4),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                                decoration: BoxDecoration(
-                                  color: _Palette.goldAccent,
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                child: Text(userRole, style: const TextStyle(color: _Palette.inkDark, fontSize: 12, fontWeight: FontWeight.bold)),
-                              ),
-                              const SizedBox(height: 4),
-                              Text("ID: $userId", style: const TextStyle(color: Colors.white70, fontSize: 11)),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
+                borderRadius: BorderRadius.vertical(bottom: Radius.circular(28)),
               ),
-
-              Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  children: [
-                    // Role-based Location Card
-                    _buildRoleBasedLocationCard(),
-                    const SizedBox(height: 16),
-
-                    // Metrics
-                    Row(
-                      children: [
-                        _buildMetricCard("₹45,200", "This Month", Icons.currency_rupee, Colors.green),
-                        const SizedBox(width: 8),
-                        _buildMetricCard("1 / 5", "Rank", Icons.emoji_events_outlined, Colors.amber),
-                        const SizedBox(width: 8),
-                        _buildMetricCard("${dailyTaskHistory.length}", "Orders", Icons.shopping_bag_outlined, Colors.blue),
-                        const SizedBox(width: 8),
-                        _buildMetricCard("0", "Pending", Icons.assignment_outlined, Colors.redAccent),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-
-                    // Leave Management
-                    Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: _Palette.cardBg,
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: _Palette.border),
-                      ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Row(
-                            children: [
-                              Icon(Icons.event_available, color: _Palette.primaryBrown),
-                              SizedBox(width: 10),
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text("Leave Management", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: _Palette.inkDark)),
-                                  Text("Apply & view leave history", style: TextStyle(fontSize: 11, color: Colors.grey)),
-                                ],
-                              )
-                            ],
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text("$userRole Dashboard", style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.white)),
+                      PopupMenuButton<String>(
+                        icon: const Icon(Icons.more_vert, color: Colors.white),
+                        onSelected: (value) {
+                          if (value == 'info') {
+                            _showPersonalInfoModal();
+                          } else if (value == 'catalog') {
+                            _showProductCatalogModal();
+                          } else if (value == 'password') {
+                            _showChangePasswordDialog();
+                          }
+                        },
+                        itemBuilder: (context) => [
+                          const PopupMenuItem(
+                            value: 'info',
+                            child: Row(
+                              children: [
+                                Icon(Icons.person, color: _Palette.primaryBrown),
+                                SizedBox(width: 8),
+                                Text("Personal Info"),
+                              ],
+                            ),
                           ),
-                          Row(
-                            children: [
-                              IconButton(
-                                icon: const Icon(Icons.history, color: _Palette.primaryBrown),
-                                onPressed: _showLeaveHistoryModal,
-                              ),
-                              ElevatedButton(
-                                style: ElevatedButton.styleFrom(backgroundColor: _Palette.primaryBrown),
-                                onPressed: _showAbsenceRequestDialog,
-                                child: const Text("Apply", style: TextStyle(color: Colors.white, fontSize: 12)),
-                              )
-                            ],
-                          )
+                          const PopupMenuItem(
+                            value: 'catalog',
+                            child: Row(
+                              children: [
+                                Icon(Icons.inventory, color: _Palette.primaryBrown),
+                                SizedBox(width: 8),
+                                Text("Product Catalog"),
+                              ],
+                            ),
+                          ),
+                          const PopupMenuItem(
+                            value: 'password',
+                            child: Row(
+                              children: [
+                                Icon(Icons.lock_reset, color: _Palette.primaryBrown),
+                                SizedBox(width: 8),
+                                Text("Change Password"),
+                              ],
+                            ),
+                          ),
                         ],
                       ),
-                    ),
-                    const SizedBox(height: 16),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
 
-                    // Attendance & Punch
-                    Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: _Palette.cardBg,
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: _Palette.border),
-                      ),
+                  StreamBuilder<DateTime>(
+                    stream: _clockStream,
+                    initialData: DateTime.now(),
+                    builder: (context, snapshot) {
+                      final now = snapshot.data ?? DateTime.now();
+                      final timeString = DateFormat('hh:mm:ss a').format(now);
+                      final dateString = DateFormat('EEEE, dd MMMM yyyy').format(now);
+
+                      return Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: Colors.white10,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Row(
+                              children: [
+                                const Icon(Icons.access_time, color: _Palette.goldAccent, size: 18),
+                                const SizedBox(width: 6),
+                                Text(timeString, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                              ],
+                            ),
+                            Text(dateString, style: const TextStyle(color: _Palette.goldLight, fontSize: 12)),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+
+                  const SizedBox(height: 12),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(userName, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
+                      Text("Employee ID: $userId", style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                    ],
+                  ),
+
+                  _buildTopSummaryCard(),
+                ],
+              ),
+            ),
+
+            Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                children: [
+                  _buildRoleBasedLocationCard(),
+                  const SizedBox(height: 16),
+
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: _Palette.cardBg,
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: _Palette.border),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text("Leave Management", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: _Palette.inkDark)),
+                        Row(
+                          children: [
+                            IconButton(icon: const Icon(Icons.history, color: _Palette.primaryBrown), onPressed: _showLeaveHistoryModal),
+                            ElevatedButton(
+                              style: ElevatedButton.styleFrom(backgroundColor: _Palette.primaryBrown),
+                              onPressed: _showAbsenceRequestDialog,
+                              child: const Text("Apply", style: TextStyle(color: Colors.white, fontSize: 12)),
+                            )
+                          ],
+                        )
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: _Palette.cardBg,
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: _Palette.border),
+                    ),
+                    child: Column(
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Text("Attendance & Punch", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: _Palette.inkDark)),
+                            Row(
+                              children: [
+                                IconButton(
+                                  icon: const Icon(Icons.history, color: _Palette.primaryBrown, size: 22),
+                                  onPressed: _showAttendanceHistoryModal,
+                                ),
+                                Text(isCheckedIn ? "Checked In" : "Not Checked In", style: TextStyle(color: isCheckedIn ? Colors.green : Colors.red, fontWeight: FontWeight.bold, fontSize: 12)),
+                              ],
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        SizedBox(
+                          width: double.infinity,
+                          height: 44,
+                          child: ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(backgroundColor: isCheckedIn ? Colors.red.shade700 : const Color(0xFF2E7D32)),
+                            icon: const Icon(Icons.camera_alt, color: Colors.white, size: 18),
+                            label: Text(
+                              isCheckedIn ? "Punch Out (Face Detection)" : "Punch In (Face Detection)",
+                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                            ),
+                            onPressed: _triggerSelfiePunch,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: _Palette.cardBg,
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: _Palette.border),
+                    ),
+                    child: Form(
+                      key: _taskFormKey,
                       child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              const Row(
-                                children: [
-                                  Icon(Icons.fingerprint, color: _Palette.primaryBrown),
-                                  SizedBox(width: 8),
-                                  Text("Attendance & Punch", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: _Palette.inkDark)),
-                                ],
-                              ),
-                              Text(
-                                isCheckedIn ? "Checked In" : "Not Checked In",
-                                style: TextStyle(color: isCheckedIn ? Colors.green : Colors.red, fontWeight: FontWeight.bold, fontSize: 12),
-                              )
+                              const Text("Daily Report Log", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: _Palette.inkDark)),
+                              IconButton(icon: const Icon(Icons.history, color: Colors.grey), onPressed: _showDailyTaskHistoryModal),
                             ],
                           ),
                           const SizedBox(height: 12),
-                          StreamBuilder<DateTime>(
-                            stream: _clockStream,
-                            builder: (context, snapshot) {
-                              DateTime now = snapshot.data ?? DateTime.now();
-                              return Container(
-                                width: double.infinity,
-                                padding: const EdgeInsets.symmetric(vertical: 12),
-                                decoration: BoxDecoration(color: _Palette.primaryBrown, borderRadius: BorderRadius.circular(14)),
-                                child: Column(
-                                  children: [
-                                    Text("${_getDayName(now.weekday)}, ${now.day} ${_getMonthName(now.month)} ${now.year}", style: const TextStyle(color: Colors.white70, fontSize: 12)),
-                                    Text(
-                                      "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')}",
-                                      style: const TextStyle(color: _Palette.goldLight, fontSize: 22, fontWeight: FontWeight.bold),
-                                    ),
-                                  ],
+                          TextFormField(
+                            controller: _firmNameController,
+                            decoration: InputDecoration(labelText: 'Firm / Retailer Shop Name', border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)), isDense: true),
+                            validator: (v) => (v == null || v.isEmpty) ? 'Enter Firm Name' : null,
+                          ),
+                          const SizedBox(height: 12),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: TextFormField(
+                                  controller: _mobileController,
+                                  keyboardType: TextInputType.phone,
+                                  maxLength: 10,
+                                  decoration: InputDecoration(labelText: 'Mobile No.', counterText: '', border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)), isDense: true),
+                                  validator: (v) => (v == null || v.length < 10) ? '10 Digits required' : null,
                                 ),
-                              );
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: TextFormField(
+                                  controller: _pinCodeController,
+                                  keyboardType: TextInputType.number,
+                                  maxLength: 6,
+                                  decoration: InputDecoration(labelText: 'PIN Code', counterText: '', border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)), isDense: true),
+                                  validator: (v) => (v == null || v.length < 6) ? 'Invalid PIN' : null,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+
+                          DropdownButtonFormField<String>(
+                            value: selectedCategory,
+                            isExpanded: true,
+                            decoration: InputDecoration(labelText: 'Product Category', border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)), isDense: true),
+                            items: productCatalog.keys.map((cat) => DropdownMenuItem(value: cat, child: Text(cat))).toList(),
+                            onChanged: (cat) {
+                              if (cat != null) {
+                                setState(() {
+                                  selectedCategory = cat;
+                                  selectedProductName = productCatalog[cat]!.first['name'] as String;
+                                  selectedProductPrice = (productCatalog[cat]!.first['price'] as num).toDouble();
+                                });
+                              }
                             },
                           ),
                           const SizedBox(height: 12),
-                          SizedBox(
-                            width: double.infinity,
-                            height: 44,
-                            child: ElevatedButton.icon(
-                              style: ElevatedButton.styleFrom(backgroundColor: isCheckedIn ? Colors.red.shade700 : const Color(0xFF2E7D32)),
-                              icon: const Icon(Icons.camera_alt, color: Colors.white, size: 18),
-                              label: Text(
-                                isCheckedIn ? "Punch Out (Face Detection)" : "Punch In (Face Detection)",
-                                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                              ),
-                              onPressed: _triggerSelfiePunch,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          Container(
-                            padding: const EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: Colors.amber.shade50,
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: Colors.amber.shade300),
-                            ),
-                            child: Row(
-                              children: [
-                                Icon(Icons.info_outline, color: Colors.amber.shade700, size: 16),
-                                const SizedBox(width: 8),
-                                const Expanded(
-                                  child: Text(
-                                    "Face detection includes: Smile detection, Eye tracking, Head pose estimation",
-                                    style: TextStyle(fontSize: 10, color: Colors.amber),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 16),
 
-                    // Daily Report Log
-                    Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: _Palette.cardBg,
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: _Palette.border),
-                      ),
-                      child: Form(
-                        key: _taskFormKey,
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                const Row(
-                                  children: [
-                                    Icon(Icons.edit_note, color: _Palette.primaryBrown),
-                                    SizedBox(width: 8),
-                                    Text("Daily Report Log", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: _Palette.inkDark)),
-                                  ],
-                                ),
-                                Row(
-                                  children: [
-                                    IconButton(
-                                      icon: const Icon(Icons.history, color: Colors.grey),
-                                      tooltip: "Order History",
-                                      onPressed: _showDailyTaskHistoryModal,
-                                    ),
-                                  ],
-                                )
-                              ],
-                            ),
-                            const SizedBox(height: 12),
-
-                            TextFormField(
-                              controller: _firmNameController,
-                              decoration: InputDecoration(
-                                labelText: 'Firm / Retailer Shop Name',
-                                prefixIcon: const Icon(Icons.storefront, color: _Palette.primaryBrown),
-                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                                isDense: true,
-                              ),
-                              validator: (v) => (v == null || v.isEmpty) ? 'Enter Firm Name' : null,
-                            ),
-                            const SizedBox(height: 12),
-
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: TextFormField(
-                                    controller: _mobileController,
-                                    keyboardType: TextInputType.phone,
-                                    maxLength: 10,
-                                    decoration: InputDecoration(
-                                      labelText: 'Mobile No.',
-                                      counterText: '',
-                                      prefixIcon: const Icon(Icons.phone_android, color: _Palette.primaryBrown),
-                                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                                      isDense: true,
-                                    ),
-                                    validator: (v) {
-                                      if (v == null || v.isEmpty) return 'Enter Mobile';
-                                      if (v.length < 10) return 'Enter 10 digits';
-                                      return null;
-                                    },
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: TextFormField(
-                                    controller: _pinCodeController,
-                                    keyboardType: TextInputType.number,
-                                    maxLength: 6,
-                                    decoration: InputDecoration(
-                                      labelText: 'PIN Code',
-                                      counterText: '',
-                                      prefixIcon: const Icon(Icons.location_on_outlined, color: _Palette.primaryBrown),
-                                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                                      isDense: true,
-                                    ),
-                                    validator: (v) {
-                                      if (v == null || v.isEmpty) return 'Enter PIN';
-                                      if (v.length < 6) return 'Invalid PIN';
-                                      return null;
-                                    },
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 12),
-
-                            DropdownButtonFormField<String>(
-                              value: selectedCategory,
-                              isExpanded: true,
-                              decoration: InputDecoration(
-                                labelText: 'Product Category',
-                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                                isDense: true,
-                              ),
-                              items: productCatalog.keys.map((cat) => DropdownMenuItem(
-                                value: cat,
-                                child: Text(cat, overflow: TextOverflow.ellipsis),
-                              )).toList(),
-                              onChanged: (cat) {
-                                if (cat != null) {
-                                  setState(() {
-                                    selectedCategory = cat;
-                                    selectedProductName = productCatalog[cat]!.first['name'] as String;
-                                    selectedProductPrice = (productCatalog[cat]!.first['price'] as num).toDouble();
-                                  });
-                                }
-                              },
-                            ),
-                            const SizedBox(height: 12),
-
+                          if (selectedCategory != null && productCatalog[selectedCategory] != null)
                             DropdownButtonFormField<String>(
                               value: selectedProductName,
                               isExpanded: true,
-                              decoration: InputDecoration(
-                                labelText: 'Select Product (With Rate)',
-                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                                isDense: true,
-                              ),
+                              decoration: InputDecoration(labelText: 'Select Product', border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)), isDense: true),
                               items: productCatalog[selectedCategory]!.map((prod) {
                                 return DropdownMenuItem<String>(
                                   value: prod['name'] as String,
-                                  child: Text(
-                                    "${prod['name']} - ₹${prod['price']}",
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
+                                  child: Text("${prod['name']} - ₹${prod['price']}"),
                                 );
                               }).toList(),
                               onChanged: (prodName) {
@@ -1874,157 +1495,50 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                 }
                               },
                             ),
-                            const SizedBox(height: 12),
-
-                            TextFormField(
-                              controller: _qtyController,
-                              keyboardType: TextInputType.number,
-                              decoration: InputDecoration(
-                                labelText: 'Quantity',
-                                prefixIcon: const Icon(Icons.numbers, color: _Palette.primaryBrown),
-                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                                isDense: true,
-                              ),
-                              onChanged: (_) => setState(() {}),
-                              validator: (v) => (v == null || v.isEmpty) ? 'Enter Quantity' : null,
-                            ),
-                            const SizedBox(height: 12),
-
-                            Container(
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: _Palette.cardHeaderBg,
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                children: [
-                                  const Text("Calculated Total Amount:", style: TextStyle(fontWeight: FontWeight.bold, color: _Palette.inkDark)),
-                                  Text("₹${calculatedTotal.toStringAsFixed(2)}", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.green)),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-
-                            Row(
+                          const SizedBox(height: 12),
+                          TextFormField(
+                            controller: _qtyController,
+                            keyboardType: TextInputType.number,
+                            decoration: InputDecoration(labelText: 'Quantity', border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)), isDense: true),
+                            onChanged: (_) => setState(() {}),
+                            validator: (v) => (v == null || v.isEmpty) ? 'Enter Qty' : null,
+                          ),
+                          const SizedBox(height: 12),
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(color: _Palette.cardHeaderBg, borderRadius: BorderRadius.circular(12)),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
-                                Expanded(
-                                  child: ElevatedButton.icon(
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: _Palette.primaryBrown,
-                                      padding: const EdgeInsets.symmetric(vertical: 12),
-                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                    ),
-                                    icon: const Icon(Icons.check_circle_outline, color: Colors.white, size: 18),
-                                    label: const Text("Send Order", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                                    onPressed: () {
-                                      if (_taskFormKey.currentState!.validate()) {
-                                        setState(() {
-                                          dailyTaskHistory.insert(0, {
-                                            'firm': _firmNameController.text,
-                                            'mobile': _mobileController.text,
-                                            'pin': _pinCodeController.text,
-                                            'category': selectedCategory,
-                                            'product': selectedProductName,
-                                            'price': selectedProductPrice,
-                                            'qty': int.parse(_qtyController.text),
-                                            'total': calculatedTotal,
-                                            'time': "${DateTime.now().hour}:${DateTime.now().minute.toString().padLeft(2, '0')}",
-                                            'status': 'Order Taken',
-                                          });
-                                          _firmNameController.clear();
-                                          _mobileController.clear();
-                                          _pinCodeController.clear();
-                                          _qtyController.text = '1';
-                                        });
-                                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Order recorded successfully!")));
-                                      }
-                                    },
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: ElevatedButton.icon(
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: _Palette.whatsappGreen,
-                                      padding: const EdgeInsets.symmetric(vertical: 12),
-                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                    ),
-                                    icon: const Icon(Icons.send, color: Colors.white, size: 18),
-                                    label: const Text("WhatsApp", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                                    onPressed: () {
-                                      if (_taskFormKey.currentState!.validate()) {
-                                        ScaffoldMessenger.of(context).showSnackBar(
-                                          SnackBar(content: Text("Sharing order details for ${_firmNameController.text} on WhatsApp...")),
-                                        );
-                                      }
-                                    },
-                                  ),
-                                ),
+                                const Text("Calculated Total:", style: TextStyle(fontWeight: FontWeight.bold, color: _Palette.inkDark)),
+                                Text("₹${calculatedTotal.toStringAsFixed(2)}", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.green)),
                               ],
-                            )
-                          ],
-                        ),
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          SizedBox(
+                            width: double.infinity,
+                            child: ElevatedButton.icon(
+                              style: ElevatedButton.styleFrom(backgroundColor: _Palette.primaryBrown, padding: const EdgeInsets.symmetric(vertical: 12)),
+                              icon: const Icon(Icons.check_circle_outline, color: Colors.white),
+                              label: const Text("Save Order Report", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                              onPressed: () {
+                                if (_taskFormKey.currentState!.validate()) {
+                                  _submitDailyReportApi();
+                                }
+                              },
+                            ),
+                          )
+                        ],
                       ),
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildProfileInfoRow(IconData icon, String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6.0),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icon, size: 18, color: _Palette.primaryBrown),
-          const SizedBox(width: 10),
-          Text("$label: ", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.grey)),
-          Expanded(child: Text(value, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: _Palette.inkDark))),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildMetricCard(String value, String title, IconData icon, Color iconColor) {
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 4),
-        decoration: BoxDecoration(
-          color: _Palette.cardBg,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: _Palette.border.withOpacity(0.5)),
-        ),
-        child: Column(
-          children: [
-            CircleAvatar(
-              radius: 16,
-              backgroundColor: iconColor.withOpacity(0.12),
-              child: Icon(icon, color: iconColor, size: 18),
             ),
-            const SizedBox(height: 6),
-            Text(value, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: _Palette.inkDark)),
-            const SizedBox(height: 2),
-            Text(title, style: const TextStyle(fontSize: 10, color: Colors.grey)),
           ],
         ),
       ),
     );
-  }
-
-  String _getDayName(int day) {
-    const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
-    return days[day - 1];
-  }
-
-  String _getMonthName(int month) {
-    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    return months[month - 1];
   }
 }
