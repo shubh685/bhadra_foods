@@ -14,7 +14,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'Log_In.dart';
 
 // API Base URL
-const String API_BASE_URL = 'http://192.168.0.102/bhadra_foods/';
+const String API_BASE_URL = 'http://192.168.0.115/bhadra_foods/';
 
 class _AdminPalette {
   static const darkHeaderTop = Color(0xFF381C00);
@@ -783,10 +783,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   // Leave Management
+  // ==================== LEAVE MANAGEMENT (SALESMAN) ====================
+
+// Fetch leave history for the logged-in salesman
   Future<void> _fetchLeaveHistory() async {
     try {
-      final response = await http
-          .get(Uri.parse("${API_BASE_URL}manage_leaves.php?emp_id=$userId"));
+      final response = await http.get(
+        Uri.parse("${API_BASE_URL}manage_leaves.php?emp_id=$userId"),
+      );
+
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         if (data['status'] == 'success' && mounted) {
@@ -805,6 +810,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+// Submit leave application
   Future<void> _submitLeaveApi(String type, String startDate, String endDate, String reason) async {
     try {
       final response = await http.post(
@@ -820,26 +826,36 @@ class _DashboardScreenState extends State<DashboardScreen> {
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         if (data['status'] == 'success') {
-          _fetchLeaveHistory();
+          await _fetchLeaveHistory();
           if (!mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(backgroundColor: Colors.green, content: Text("Leave Application Submitted!")),
+            const SnackBar(
+                backgroundColor: Colors.green,
+                content: Text("Leave Application Submitted!")
+            ),
           );
         } else {
           if (!mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(backgroundColor: Colors.red, content: Text(data['message'] ?? 'Failed to submit leave')),
+            SnackBar(
+                backgroundColor: Colors.red,
+                content: Text(data['message'] ?? 'Failed to submit leave')
+            ),
           );
         }
       }
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(backgroundColor: Colors.red, content: Text("Failed to submit leave: $e")),
+        SnackBar(
+            backgroundColor: Colors.red,
+            content: Text("Failed to submit leave: $e")
+        ),
       );
     }
   }
 
+// Show leave application dialog
   void _showLeaveApplicationDialog() {
     _selectedLeaveDateRange = null;
     _leaveReasonController.clear();
@@ -947,6 +963,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
+// Show leave history modal with real-time status updates
   void _showLeaveHistoryModal() {
     // First fetch latest data from API
     _fetchLeaveHistory();
@@ -955,130 +972,173 @@ class _DashboardScreenState extends State<DashboardScreen> {
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
-      builder: (ctx) => Container(
-        decoration: const BoxDecoration(
-          color: _AdminPalette.bgWarm,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-        ),
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text("Leave History",
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _AdminPalette.inkDark)),
-                IconButton(
-                  icon: const Icon(Icons.refresh, color: _AdminPalette.primaryBrown),
-                  onPressed: () {
-                    setState(() {
-                      _fetchLeaveHistory();
-                    });
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text("Refreshing leave history..."), duration: Duration(seconds: 1)),
-                    );
-                  },
-                  tooltip: "Refresh",
-                ),
-              ],
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setModalState) {
+          return Container(
+            decoration: const BoxDecoration(
+              color: _AdminPalette.bgWarm,
+              borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
             ),
-            const Divider(),
-            Expanded(
-              child: leaveHistory.isEmpty
-                  ? const Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Icon(Icons.hourglass_empty, size: 50, color: Colors.grey),
-                    SizedBox(height: 10),
-                    Text("No leave history found", style: TextStyle(color: Colors.grey)),
+                    const Text("Leave History",
+                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _AdminPalette.inkDark)),
+                    Row(
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.refresh, color: _AdminPalette.primaryBrown),
+                          onPressed: () {
+                            _fetchLeaveHistory().then((_) {
+                              setModalState(() {});
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text("Refreshing leave history..."), duration: Duration(seconds: 1)),
+                              );
+                            });
+                          },
+                          tooltip: "Refresh",
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close),
+                          onPressed: () => Navigator.pop(ctx),
+                        ),
+                      ],
+                    ),
                   ],
                 ),
-              )
-                  : ListView.builder(
-                itemCount: leaveHistory.length,
-                itemBuilder: (ctx, idx) {
-                  final item = leaveHistory[idx];
-                  Color statusColor = Colors.orange;
-                  if (item['status'] == 'Approved') statusColor = Colors.green;
-                  if (item['status'] == 'Rejected') statusColor = Colors.red;
-
-                  return Card(
-                    color: _AdminPalette.cardBg,
-                    margin: const EdgeInsets.symmetric(vertical: 6),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      side: BorderSide(
-                        color: statusColor.withOpacity(0.3),
-                        width: 1,
-                      ),
+                const Divider(),
+                Expanded(
+                  child: leaveHistory.isEmpty
+                      ? const Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.hourglass_empty, size: 50, color: Colors.grey),
+                        SizedBox(height: 10),
+                        Text("No leave history found", style: TextStyle(color: Colors.grey)),
+                      ],
                     ),
-                    child: ListTile(
-                      leading: Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: statusColor.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Icon(
-                          item['leave_type'] == 'Casual Leave' ? Icons.beach_access :
-                          item['leave_type'] == 'Sick Leave' ? Icons.medication :
-                          item['leave_type'] == 'Maternity Leave' ? Icons.family_restroom :
-                          item['leave_type'] == 'Paternity Leave' ? Icons.people :
-                          Icons.calendar_today,
-                          color: statusColor,
-                          size: 20,
-                        ),
-                      ),
-                      title: Text(item['leave_type'] ?? '',
-                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                      subtitle: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const SizedBox(height: 4),
-                          Text("📅 ${item['start_date']} to ${item['end_date']}",
-                              style: const TextStyle(fontSize: 12)),
-                          Text("📝 ${item['reason']}",
-                              style: const TextStyle(fontSize: 11, color: Colors.grey)),
-                          Text("🕐 ${item['created_at'] ?? ''}",
-                              style: const TextStyle(fontSize: 10, color: Colors.grey)),
-                        ],
-                      ),
-                      trailing: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: statusColor.withOpacity(0.15),
+                  )
+                      : ListView.builder(
+                    itemCount: leaveHistory.length,
+                    itemBuilder: (ctx, idx) {
+                      final item = leaveHistory[idx];
+                      Color statusColor = Colors.orange;
+                      if (item['status'] == 'Approved') statusColor = Colors.green;
+                      if (item['status'] == 'Rejected') statusColor = Colors.red;
+
+                      return Card(
+                        color: _AdminPalette.cardBg,
+                        margin: const EdgeInsets.symmetric(vertical: 6),
+                        shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: statusColor, width: 1.5),
-                        ),
-                        child: Text(
-                          item['status'] ?? 'Pending',
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            color: statusColor,
-                            fontSize: 11,
+                          side: BorderSide(
+                            color: statusColor.withOpacity(0.3),
+                            width: 1,
                           ),
                         ),
-                      ),
+                        child: ListTile(
+                          leading: Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: statusColor.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Icon(
+                              item['leave_type'] == 'Casual Leave' ? Icons.beach_access :
+                              item['leave_type'] == 'Sick Leave' ? Icons.medication :
+                              item['leave_type'] == 'Maternity Leave' ? Icons.family_restroom :
+                              item['leave_type'] == 'Paternity Leave' ? Icons.people :
+                              Icons.calendar_today,
+                              color: statusColor,
+                              size: 20,
+                            ),
+                          ),
+                          title: Text(item['leave_type'] ?? '',
+                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                          subtitle: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const SizedBox(height: 4),
+                              Text("📅 ${item['start_date']} to ${item['end_date']}",
+                                  style: const TextStyle(fontSize: 12)),
+                              Text("📝 ${item['reason']}",
+                                  style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                              Text("🕐 ${item['created_at'] ?? ''}",
+                                  style: const TextStyle(fontSize: 10, color: Colors.grey)),
+                            ],
+                          ),
+                          trailing: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: statusColor.withOpacity(0.15),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: statusColor, width: 1.5),
+                            ),
+                            child: Text(
+                              item['status'] ?? 'Pending',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: statusColor,
+                                fontSize: 11,
+                              ),
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                if (leaveHistory.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: _AdminPalette.cardHeaderBg,
+                      borderRadius: BorderRadius.circular(10),
                     ),
-                  );
-                },
-              ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceAround,
+                      children: [
+                        _buildLeaveStatSalesman("Total", leaveHistory.length, Colors.grey),
+                        _buildLeaveStatSalesman("Pending",
+                            leaveHistory.where((l) => l['status'] == 'Pending').length, Colors.orange),
+                        _buildLeaveStatSalesman("Approved",
+                            leaveHistory.where((l) => l['status'] == 'Approved').length, Colors.green),
+                        _buildLeaveStatSalesman("Rejected",
+                            leaveHistory.where((l) => l['status'] == 'Rejected').length, Colors.red),
+                      ],
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 10),
+              ],
             ),
-            const SizedBox(height: 10),
-            Center(
-              child: Text(
-                "Total: ${leaveHistory.length} leave(s)",
-                style: const TextStyle(fontSize: 12, color: Colors.grey),
-              ),
-            ),
-            const SizedBox(height: 10),
-          ],
-        ),
+          );
+        },
       ),
     );
   }
+
+  Widget _buildLeaveStatSalesman(String label, int count, Color color) {
+    return Column(
+      children: [
+        Text(
+          count.toString(),
+          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: color),
+        ),
+        Text(
+          label,
+          style: const TextStyle(fontSize: 10, color: Colors.grey),
+        ),
+      ],
+    );
+  }
+
 
   // WhatsApp Order
   Future<void> _sendWhatsAppOrderAndSave() async {

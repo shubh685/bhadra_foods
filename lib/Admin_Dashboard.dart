@@ -15,8 +15,8 @@ class _AdminPalette {
   static const accentBadge = Color(0xFFF3C262);
 }
 
-// API Base URL - Update this with your server URL
-const String API_BASE_URL = 'http://192.168.0.102/bhadra_foods/';
+// API Base URL
+const String API_BASE_URL = 'http://192.168.0.115/bhadra_foods/';
 
 // Model for Admin User
 class AdminModel {
@@ -54,8 +54,7 @@ class AdminModel {
   }
 }
 
-// Model for Salesman
-// Model for Salesman
+// Model for Salesman mapped directly to MySQL table 'manage_salesmna'
 class SalesmanModel {
   String id;
   String name;
@@ -68,6 +67,8 @@ class SalesmanModel {
   bool isLive;
   String assignedRoute;
   String liveLocation;
+  double? latitude;
+  double? longitude;
 
   SalesmanModel({
     required this.id,
@@ -81,13 +82,45 @@ class SalesmanModel {
     this.isLive = true,
     this.assignedRoute = '',
     this.liveLocation = '',
+    this.latitude,
+    this.longitude,
   });
 
   factory SalesmanModel.fromJson(Map<String, dynamic> json) {
+    double? lat;
+    if (json['latitude'] != null && json['latitude'] != '') {
+      try {
+        lat = double.tryParse(json['latitude'].toString());
+      } catch (_) {
+        lat = null;
+      }
+    } else if (json['lat'] != null && json['lat'] != '') {
+      try {
+        lat = double.tryParse(json['lat'].toString());
+      } catch (_) {
+        lat = null;
+      }
+    }
+
+    double? lng;
+    if (json['longitude'] != null && json['longitude'] != '') {
+      try {
+        lng = double.tryParse(json['longitude'].toString());
+      } catch (_) {
+        lng = null;
+      }
+    } else if (json['lng'] != null && json['lng'] != '') {
+      try {
+        lng = double.tryParse(json['lng'].toString());
+      } catch (_) {
+        lng = null;
+      }
+    }
+
     return SalesmanModel(
       id: json['id']?.toString() ?? '',
       name: json['name'] ?? '',
-      empId: json['emp_id']?.toString() ?? '', // Ensure emp_id parses as String
+      empId: json['emp_id']?.toString() ?? '',
       role: json['role'] ?? '',
       city: json['city'] ?? '',
       phone: json['mobile'] ?? '',
@@ -96,19 +129,62 @@ class SalesmanModel {
       isLive: json['is_live'] == 1 || json['is_live'] == true,
       assignedRoute: json['assigned_route'] ?? '',
       liveLocation: json['live_location'] ?? '',
+      latitude: lat,
+      longitude: lng,
     );
   }
 
   Map<String, dynamic> toJson() {
     return {
-      'emp_id': empId, // Include emp_id in JSON payload
+      'emp_id': empId,
       'name': name,
       'mobile': phone,
       'email': email,
       'city': city,
       'role': role,
       'assigned_route': assignedRoute,
+      'latitude': latitude,
+      'longitude': longitude,
     };
+  }
+}
+
+// Model for Attendance mapped directly to MySQL table 'attendance'
+class AttendanceRecord {
+  String id;
+  String empId;
+  String role;
+  String photo;
+  String punchType;
+  String punchDate;
+  String punchTime;
+  String day;
+  String createdAt;
+
+  AttendanceRecord({
+    required this.id,
+    required this.empId,
+    required this.role,
+    required this.photo,
+    required this.punchType,
+    required this.punchDate,
+    required this.punchTime,
+    required this.day,
+    required this.createdAt,
+  });
+
+  factory AttendanceRecord.fromJson(Map<String, dynamic> json) {
+    return AttendanceRecord(
+      id: json['id']?.toString() ?? '',
+      empId: json['emp_id']?.toString() ?? '',
+      role: json['role'] ?? '',
+      photo: json['photo'] ?? '',
+      punchType: json['punch_type'] ?? '',
+      punchDate: json['punch_date'] ?? '',
+      punchTime: json['punch_time'] ?? '',
+      day: json['day'] ?? '',
+      createdAt: json['created_at'] ?? '',
+    );
   }
 }
 
@@ -148,6 +224,102 @@ class ProductItem {
   }
 }
 
+// Model for Daily Report mapped directly to MySQL table 'daily_report'
+class DailyReport {
+  String id;
+  String empId;
+  String firmName;
+  String mobile;
+  String pinCode;
+  String category;
+  String productName;
+  double price;
+  int quantity;
+  double totalAmount;
+  String? latitude;
+  String? longitude;
+  String address;
+  String createdAt;
+
+  DailyReport({
+    required this.id,
+    required this.empId,
+    required this.firmName,
+    required this.mobile,
+    required this.pinCode,
+    required this.category,
+    required this.productName,
+    required this.price,
+    required this.quantity,
+    required this.totalAmount,
+    this.latitude,
+    this.longitude,
+    required this.address,
+    required this.createdAt,
+  });
+
+  factory DailyReport.fromJson(Map<String, dynamic> json) {
+    return DailyReport(
+      id: json['id']?.toString() ?? '',
+      empId: json['emp_id']?.toString() ?? '',
+      firmName: json['firm_name'] ?? '',
+      mobile: json['mobile'] ?? '',
+      pinCode: json['pin_code'] ?? '',
+      category: json['category'] ?? '',
+      productName: json['product_name'] ?? '',
+      price: double.tryParse(json['price']?.toString() ?? '0') ?? 0,
+      quantity: int.tryParse(json['quantity']?.toString() ?? '0') ?? 0,
+      totalAmount: double.tryParse(json['total_amount']?.toString() ?? '0') ?? 0,
+      latitude: json['latitude']?.toString(),
+      longitude: json['longitude']?.toString(),
+      address: json['address'] ?? '',
+      createdAt: json['created_at'] ?? '',
+    );
+  }
+}
+
+// Model for Leave Request mapped directly to MySQL table 'manage_leaves'
+class LeaveRequest {
+  String id;
+  String empId;
+  String empName;
+  String empRole;
+  String leaveType;
+  String startDate;
+  String endDate;
+  String reason;
+  String status;
+  String createdAt;
+
+  LeaveRequest({
+    required this.id,
+    required this.empId,
+    required this.empName,
+    required this.empRole,
+    required this.leaveType,
+    required this.startDate,
+    required this.endDate,
+    required this.reason,
+    required this.status,
+    required this.createdAt,
+  });
+
+  factory LeaveRequest.fromJson(Map<String, dynamic> json) {
+    return LeaveRequest(
+      id: json['id']?.toString() ?? '',
+      empId: json['emp_id']?.toString() ?? '',
+      empName: json['emp_name'] ?? '',
+      empRole: json['emp_role'] ?? '',
+      leaveType: json['leave_type'] ?? '',
+      startDate: json['start_date'] ?? '',
+      endDate: json['end_date'] ?? '',
+      reason: json['reason'] ?? '',
+      status: json['status'] ?? 'Pending',
+      createdAt: json['created_at'] ?? '',
+    );
+  }
+}
+
 class AdminDashboard extends StatefulWidget {
   const AdminDashboard({super.key});
 
@@ -162,33 +334,22 @@ class _AdminDashboardState extends State<AdminDashboard> {
   // API Data Lists
   List<SalesmanModel> salesmenList = [];
   List<ProductItem> productCatalog = [];
+  List<AttendanceRecord> attendanceHistory = [];
+  List<DailyReport> dailyReports = [];
+  List<LeaveRequest> leaveList = [];
   AdminModel? adminData;
+
+  // Selected Employee filter for feed
+  String _selectedEmpIdFilter = 'all';
 
   // Loading states
   bool isLoadingSalesmen = false;
   bool isLoadingCatalog = false;
   bool isLoadingAdmin = false;
+  bool isLoadingAttendance = false;
+  bool isLoadingReports = false;
+  bool isLoadingLeaves = false;
   String? errorMessage;
-
-  // Leave Requests (Mock data for now - can be extended)
-  final List<LeaveRequest> leaveList = [
-    LeaveRequest(
-      id: "LV-01",
-      empName: "Rahul Sharma",
-      empRole: "Salesman",
-      date: "14 Sep 2026",
-      reason: "Medical leave",
-      status: "Pending",
-    ),
-    LeaveRequest(
-      id: "LV-02",
-      empName: "Amit Shah",
-      empRole: "Sales Officer",
-      date: "18 Sep 2026",
-      reason: "Personal work",
-      status: "Pending",
-    ),
-  ];
 
   final List<String> roleOptions = [
     "Salesman",
@@ -209,15 +370,61 @@ class _AdminDashboardState extends State<AdminDashboard> {
         });
       }
     });
-    _fetchAdminData();
-    _fetchSalesmenData();
-    _fetchCatalogData();
+    _loadAllData();
   }
 
   @override
   void dispose() {
     _timer.cancel();
     super.dispose();
+  }
+
+  // Helper method to format Employee IDs consistently (e.g. BHFSM-01)
+  String _formatEmpId(String rawEmpId, String role) {
+    if (rawEmpId.isEmpty) return 'BHFEMP-01';
+
+    String cleaned = rawEmpId.replaceAll(':-', '-').replaceAll(':', '-');
+    if (cleaned.contains('-')) return cleaned;
+
+    String prefix;
+    switch (role) {
+      case 'Salesman':
+        prefix = 'BHFSM';
+        break;
+      case 'Sales Officer':
+        prefix = 'BHFSO';
+        break;
+      case 'ASM':
+        prefix = 'BHFAS';
+        break;
+      case 'RSM':
+        prefix = 'BHFRS';
+        break;
+      case 'ZSM':
+        prefix = 'BHFZS';
+        break;
+      case 'Sales Head':
+        prefix = 'BHFSH';
+        break;
+      default:
+        prefix = 'BHFEMP';
+    }
+
+    if (RegExp(r'^\d+$').hasMatch(cleaned)) {
+      return '$prefix-${cleaned.padLeft(2, '0')}';
+    }
+    return cleaned;
+  }
+
+  // ==================== LOAD ALL DATA ====================
+
+  Future<void> _loadAllData() async {
+    await _fetchAdminData();
+    await _fetchSalesmenData();
+    await _fetchCatalogData();
+    await _fetchAllLeaves();
+    await _fetchAttendanceData(_selectedEmpIdFilter);
+    await _fetchDailyReports(_selectedEmpIdFilter);
   }
 
   // ==================== API CALLS ====================
@@ -329,7 +536,177 @@ class _AdminDashboardState extends State<AdminDashboard> {
     }
   }
 
-  // ==================== SALESMAN CRUD OPERATIONS ====================
+  Future<void> _fetchAttendanceData(String empId) async {
+    setState(() => isLoadingAttendance = true);
+    try {
+      final queryParam = (empId.isEmpty || empId == 'all') ? 'all' : Uri.encodeComponent(empId);
+      final response = await http.get(
+        Uri.parse('${API_BASE_URL}get_attendance.php?emp_id=$queryParam'),
+        headers: {'Accept': 'application/json'},
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['status'] == true || data['status'] == 'success') {
+          final List<dynamic> history = data['history'] ?? data['data'] ?? [];
+          setState(() {
+            attendanceHistory = history.map((j) => AttendanceRecord.fromJson(j)).toList();
+            isLoadingAttendance = false;
+          });
+        } else {
+          setState(() {
+            attendanceHistory = [];
+            isLoadingAttendance = false;
+          });
+        }
+      } else {
+        setState(() {
+          attendanceHistory = [];
+          isLoadingAttendance = false;
+        });
+      }
+    } catch (e) {
+      setState(() {
+        attendanceHistory = [];
+        isLoadingAttendance = false;
+      });
+    }
+  }
+
+  Future<void> _fetchDailyReports(String empId) async {
+    setState(() => isLoadingReports = true);
+    try {
+      final queryParam = (empId.isEmpty || empId == 'all') ? 'all' : Uri.encodeComponent(empId);
+      final response = await http.get(
+        Uri.parse('${API_BASE_URL}manage_daily_reports.php?emp_id=$queryParam'),
+        headers: {'Accept': 'application/json'},
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['status'] == true || data['status'] == 'success') {
+          final List<dynamic> reports = data['reports'] ?? data['data'] ?? [];
+          setState(() {
+            dailyReports = reports.map((j) => DailyReport.fromJson(j)).toList();
+            isLoadingReports = false;
+          });
+        } else {
+          setState(() {
+            dailyReports = [];
+            isLoadingReports = false;
+          });
+        }
+      } else {
+        setState(() {
+          dailyReports = [];
+          isLoadingReports = false;
+        });
+      }
+    } catch (e) {
+      setState(() {
+        dailyReports = [];
+        isLoadingReports = false;
+      });
+    }
+  }
+
+  Future<void> _fetchAllLeaves() async {
+    setState(() => isLoadingLeaves = true);
+    try {
+      final response = await http.get(
+        Uri.parse('${API_BASE_URL}manage_leaves.php?emp_id=all'),
+        headers: {'Accept': 'application/json'},
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['status'] == true || data['status'] == 'success') {
+          final List<dynamic> leaves = data['leaves'] ?? data['data'] ?? [];
+
+          final Map<String, Map<String, String>> salesmanMap = {};
+          for (var sm in salesmenList) {
+            salesmanMap[sm.empId] = {
+              'name': sm.name,
+              'role': sm.role,
+            };
+          }
+
+          setState(() {
+            leaveList = leaves.map((leaf) {
+              final empInfo = salesmanMap[leaf['emp_id']] ?? {};
+              return LeaveRequest.fromJson({
+                ...leaf,
+                'emp_name': leaf['emp_name'] ?? empInfo['name'] ?? leaf['emp_id'] ?? 'Staff',
+                'emp_role': leaf['emp_role'] ?? empInfo['role'] ?? 'Salesman',
+              });
+            }).toList();
+            isLoadingLeaves = false;
+          });
+        } else {
+          setState(() {
+            leaveList = [];
+            isLoadingLeaves = false;
+          });
+        }
+      } else {
+        setState(() {
+          leaveList = [];
+          isLoadingLeaves = false;
+        });
+      }
+    } catch (e) {
+      setState(() {
+        leaveList = [];
+        isLoadingLeaves = false;
+      });
+    }
+  }
+
+  Future<void> _updateLeaveStatus(String leaveId, String empId, String status) async {
+    try {
+      final data = {
+        'leave_id': leaveId,
+        'emp_id': empId,
+        'status': status,
+      };
+
+      final response = await http.put(
+        Uri.parse('${API_BASE_URL}manage_leaves.php'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode(data),
+      );
+
+      if (response.statusCode == 200) {
+        final result = json.decode(response.body);
+        if (result['status'] == true || result['status'] == 'success') {
+          await _fetchAllLeaves();
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(result['message'] ?? 'Leave $status successfully'),
+                backgroundColor: status == 'Approved' ? Colors.green : Colors.red,
+              ),
+            );
+          }
+        } else {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(result['message'] ?? 'Failed to update leave'),
+                backgroundColor: Colors.red,
+              ),
+            );
+          }
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e')),
+        );
+      }
+    }
+  }
 
   Future<void> _addSalesman(SalesmanModel salesman, String password) async {
     try {
@@ -346,6 +723,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
         final result = json.decode(response.body);
         if (result['status'] == true) {
           await _fetchSalesmenData();
+          await _fetchAllLeaves();
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(content: Text(result['message'] ?? 'Salesman added successfully')),
@@ -383,6 +761,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
         final result = json.decode(response.body);
         if (result['status'] == true) {
           await _fetchSalesmenData();
+          await _fetchAllLeaves();
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(content: Text(result['message'] ?? 'Salesman updated successfully')),
@@ -416,6 +795,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
         final result = json.decode(response.body);
         if (result['status'] == true) {
           await _fetchSalesmenData();
+          await _fetchAllLeaves();
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(content: Text(result['message'] ?? 'Salesman deleted successfully')),
@@ -437,8 +817,6 @@ class _AdminDashboardState extends State<AdminDashboard> {
       }
     }
   }
-
-  // ==================== ASSIGN ROUTE API ====================
 
   Future<void> _assignRoute(String empId, String route) async {
     try {
@@ -479,8 +857,6 @@ class _AdminDashboardState extends State<AdminDashboard> {
       }
     }
   }
-
-  // ==================== CATALOG CRUD OPERATIONS ====================
 
   Future<void> _addProduct(ProductItem product) async {
     try {
@@ -588,14 +964,13 @@ class _AdminDashboardState extends State<AdminDashboard> {
     }
   }
 
-  // ==================== CHANGE PASSWORD API ====================
-
   Future<void> _changePassword(String identifier, String oldPassword, String newPassword) async {
     try {
       final data = {
         'identifier': identifier,
-        'old_password': oldPassword,  // Fixed: Use 'old_password' key
-        'new_password': newPassword,  // Fixed: Use 'new_password' key
+        'role': 'admin',
+        'old_password': oldPassword,
+        'new_password': newPassword,
       };
 
       final response = await http.post(
@@ -624,7 +999,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
     }
   }
 
-  // ==================== UI METHODS ====================
+  // ==================== UI HELPER METHODS ====================
 
   String _formatDateTime(DateTime dt) {
     final months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -633,6 +1008,767 @@ class _AdminDashboardState extends State<AdminDashboard> {
     String second = dt.second.toString().padLeft(2, '0');
     String period = dt.hour >= 12 ? 'PM' : 'AM';
     return "${dt.day.toString().padLeft(2, '0')} ${months[dt.month - 1]} ${dt.year} • $hour:$minute:$second $period";
+  }
+
+  Widget _buildLeaveStat(String label, int count, Color color) {
+    return Column(
+      children: [
+        Text(
+          count.toString(),
+          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: color),
+        ),
+        Text(
+          label,
+          style: const TextStyle(fontSize: 10, color: Colors.grey),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildBodyStat(String value, String label, IconData icon, Color color) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, color: color, size: 22),
+        const SizedBox(height: 4),
+        Text(value, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: _AdminPalette.inkDark)),
+        Text(label, style: const TextStyle(fontSize: 10, color: Colors.grey)),
+      ],
+    );
+  }
+
+  Widget _buildActionCard(String title, IconData icon, Color color, VoidCallback onTap) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: _AdminPalette.cardBg,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: _AdminPalette.border),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.02),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
+              )
+            ],
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.12),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(icon, color: color, size: 26),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                title,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: _AdminPalette.inkDark),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ==================== ACTIVITY & MANAGEMENT DIALOG ====================
+
+  void _showActivityManagementDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        backgroundColor: _AdminPalette.bgWarm,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+        child: Padding(
+          padding: const EdgeInsets.all(20.0),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Row(
+                    children: [
+                      Icon(Icons.dashboard_customize, color: _AdminPalette.primaryBrown, size: 24),
+                      SizedBox(width: 10),
+                      Text(
+                        "Activity & Management",
+                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _AdminPalette.inkDark),
+                      ),
+                    ],
+                  ),
+                  IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(ctx)),
+                ],
+              ),
+              const SizedBox(height: 16),
+              // Option Cards
+              _buildDialogOptionCard(
+                ctx,
+                title: "Leave Approvals",
+                subtitle: "${leaveList.where((l) => l.status == 'Pending').length} pending requests",
+                icon: Icons.time_to_leave,
+                color: Colors.orange,
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _showLeavesDialog();
+                },
+              ),
+              const SizedBox(height: 12),
+              _buildDialogOptionCard(
+                ctx,
+                title: "Attendance Records",
+                subtitle: "${attendanceHistory.length} records found",
+                icon: Icons.how_to_reg,
+                color: Colors.blue,
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _showAttendanceDialog();
+                },
+              ),
+              const SizedBox(height: 12),
+              _buildDialogOptionCard(
+                ctx,
+                title: "Daily Reports",
+                subtitle: "${dailyReports.length} reports available",
+                icon: Icons.assessment,
+                color: Colors.green,
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _showDailyReportsDialog();
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDialogOptionCard(
+      BuildContext ctx, {
+        required String title,
+        required String subtitle,
+        required IconData icon,
+        required Color color,
+        required VoidCallback onTap,
+      }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: _AdminPalette.border),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.02),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
+              )
+            ],
+          ),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(icon, color: color, size: 28),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 15,
+                        color: _AdminPalette.inkDark,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      subtitle,
+                      style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey.shade400),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ==================== LEAVES DIALOG ====================
+
+  void _showLeavesDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return Dialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+            backgroundColor: _AdminPalette.bgWarm,
+            insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+            child: Padding(
+              padding: const EdgeInsets.all(20.0),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Row(
+                        children: [
+                          Icon(Icons.time_to_leave, color: Colors.orange, size: 24),
+                          SizedBox(width: 10),
+                          Text(
+                            "Leave Approvals",
+                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _AdminPalette.inkDark),
+                          ),
+                        ],
+                      ),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            icon: const Icon(Icons.refresh, color: _AdminPalette.primaryBrown),
+                            onPressed: () {
+                              _fetchAllLeaves().then((_) {
+                                setDialogState(() {});
+                              });
+                            },
+                            tooltip: "Refresh",
+                          ),
+                          IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(ctx)),
+                        ],
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  if (isLoadingLeaves)
+                    const Center(child: Padding(padding: EdgeInsets.all(32), child: CircularProgressIndicator()))
+                  else if (leaveList.isEmpty)
+                    const Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(32),
+                        child: Text("No leave requests found.", style: TextStyle(color: Colors.grey)),
+                      ),
+                    )
+                  else
+                    Flexible(
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.6),
+                        child: ListView.separated(
+                          shrinkWrap: true,
+                          itemCount: leaveList.length,
+                          separatorBuilder: (_, __) => const SizedBox(height: 10),
+                          itemBuilder: (context, index) {
+                            final item = leaveList[index];
+                            Color statusColor = item.status == 'Approved'
+                                ? Colors.green
+                                : item.status == 'Rejected'
+                                ? Colors.red
+                                : Colors.amber.shade800;
+
+                            String empFormattedId = _formatEmpId(item.empId, item.empRole);
+
+                            return Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: _AdminPalette.border),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              item.empName,
+                                              style: const TextStyle(
+                                                fontWeight: FontWeight.bold,
+                                                fontSize: 14,
+                                                color: _AdminPalette.inkDark,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 2),
+                                            Row(
+                                              children: [
+                                                Container(
+                                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                                  decoration: BoxDecoration(
+                                                    color: _AdminPalette.primaryBrown.withOpacity(0.1),
+                                                    borderRadius: BorderRadius.circular(4),
+                                                  ),
+                                                  child: Text(
+                                                    empFormattedId,
+                                                    style: const TextStyle(
+                                                      fontSize: 10,
+                                                      fontWeight: FontWeight.bold,
+                                                      color: _AdminPalette.primaryBrown,
+                                                    ),
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 6),
+                                                Text(
+                                                  item.empRole,
+                                                  style: const TextStyle(fontSize: 11, color: Colors.grey),
+                                                ),
+                                              ],
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                        decoration: BoxDecoration(
+                                          color: statusColor.withOpacity(0.12),
+                                          borderRadius: BorderRadius.circular(8),
+                                          border: Border.all(color: statusColor, width: 1),
+                                        ),
+                                        child: Text(
+                                          item.status,
+                                          style: TextStyle(color: statusColor, fontSize: 11, fontWeight: FontWeight.bold),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Row(
+                                    children: [
+                                      Icon(Icons.calendar_month, size: 14, color: Colors.grey.shade600),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        "${item.leaveType} • ${item.startDate} to ${item.endDate}",
+                                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    "Reason: ${item.reason}",
+                                    style: const TextStyle(fontSize: 11, color: Colors.grey),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  if (item.status == 'Pending') ...[
+                                    const SizedBox(height: 8),
+                                    Row(
+                                      mainAxisAlignment: MainAxisAlignment.end,
+                                      children: [
+                                        OutlinedButton(
+                                          onPressed: () {
+                                            _updateLeaveStatus(item.id, item.empId, 'Rejected').then((_) {
+                                              setDialogState(() {});
+                                            });
+                                          },
+                                          style: OutlinedButton.styleFrom(
+                                            foregroundColor: Colors.red,
+                                            side: const BorderSide(color: Colors.red),
+                                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                                            minimumSize: Size.zero,
+                                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                          ),
+                                          child: const Text("Reject", style: TextStyle(fontSize: 11)),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        ElevatedButton(
+                                          onPressed: () {
+                                            _updateLeaveStatus(item.id, item.empId, 'Approved').then((_) {
+                                              setDialogState(() {});
+                                            });
+                                          },
+                                          style: ElevatedButton.styleFrom(
+                                            backgroundColor: _AdminPalette.primaryBrown,
+                                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                                            minimumSize: Size.zero,
+                                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                          ),
+                                          child: const Text("Approve", style: TextStyle(color: Colors.white, fontSize: 11)),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                  const SizedBox(height: 10),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  // ==================== ATTENDANCE DIALOG ====================
+
+  void _showAttendanceDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return Dialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+            backgroundColor: _AdminPalette.bgWarm,
+            insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+            child: Padding(
+              padding: const EdgeInsets.all(20.0),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Row(
+                        children: [
+                          Icon(Icons.how_to_reg, color: Colors.blue, size: 24),
+                          SizedBox(width: 10),
+                          Text(
+                            "Attendance Records",
+                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _AdminPalette.inkDark),
+                          ),
+                        ],
+                      ),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            icon: const Icon(Icons.refresh, color: _AdminPalette.primaryBrown),
+                            onPressed: () {
+                              _fetchAttendanceData(_selectedEmpIdFilter).then((_) {
+                                setDialogState(() {});
+                              });
+                            },
+                            tooltip: "Refresh",
+                          ),
+                          IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(ctx)),
+                        ],
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  if (isLoadingAttendance)
+                    const Center(child: Padding(padding: EdgeInsets.all(32), child: CircularProgressIndicator()))
+                  else if (attendanceHistory.isEmpty)
+                    const Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(32),
+                        child: Text("No attendance records found.", style: TextStyle(color: Colors.grey)),
+                      ),
+                    )
+                  else
+                    Flexible(
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.6),
+                        child: ListView.separated(
+                          shrinkWrap: true,
+                          itemCount: attendanceHistory.length,
+                          separatorBuilder: (_, __) => const SizedBox(height: 8),
+                          itemBuilder: (context, index) {
+                            final att = attendanceHistory[index];
+                            bool isPunchIn = att.punchType == 'PUNCH_IN';
+                            String empFormattedId = _formatEmpId(att.empId, att.role);
+
+                            return Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: _AdminPalette.border),
+                              ),
+                              child: Row(
+                                children: [
+                                  CircleAvatar(
+                                    backgroundColor: isPunchIn ? Colors.green.shade50 : Colors.orange.shade50,
+                                    child: Icon(
+                                      isPunchIn ? Icons.login : Icons.logout,
+                                      color: isPunchIn ? Colors.green : Colors.orange,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Row(
+                                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                          children: [
+                                            Text(
+                                              att.punchType,
+                                              style: TextStyle(
+                                                fontWeight: FontWeight.bold,
+                                                fontSize: 13,
+                                                color: isPunchIn ? Colors.green.shade800 : Colors.orange.shade800,
+                                              ),
+                                            ),
+                                            Container(
+                                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                              decoration: BoxDecoration(
+                                                color: Colors.grey.shade100,
+                                                borderRadius: BorderRadius.circular(4),
+                                              ),
+                                              child: Text(
+                                                empFormattedId,
+                                                style: const TextStyle(
+                                                  fontSize: 10,
+                                                  fontWeight: FontWeight.bold,
+                                                  color: _AdminPalette.primaryBrown,
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          "Time: ${att.punchTime} • Date: ${att.punchDate} (${att.day})",
+                                          style: const TextStyle(fontSize: 11, color: Colors.black87),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                  const SizedBox(height: 10),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  // ==================== DAILY REPORTS DIALOG ====================
+
+  void _showDailyReportsDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return Dialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+            backgroundColor: _AdminPalette.bgWarm,
+            insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+            child: Padding(
+              padding: const EdgeInsets.all(20.0),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Row(
+                        children: [
+                          Icon(Icons.assessment, color: Colors.green, size: 24),
+                          SizedBox(width: 10),
+                          Text(
+                            "Daily Reports",
+                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _AdminPalette.inkDark),
+                          ),
+                        ],
+                      ),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            icon: const Icon(Icons.refresh, color: _AdminPalette.primaryBrown),
+                            onPressed: () {
+                              _fetchDailyReports(_selectedEmpIdFilter).then((_) {
+                                setDialogState(() {});
+                              });
+                            },
+                            tooltip: "Refresh",
+                          ),
+                          IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(ctx)),
+                        ],
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  if (isLoadingReports)
+                    const Center(child: Padding(padding: EdgeInsets.all(32), child: CircularProgressIndicator()))
+                  else if (dailyReports.isEmpty)
+                    const Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(32),
+                        child: Text("No daily reports found.", style: TextStyle(color: Colors.grey)),
+                      ),
+                    )
+                  else
+                    Flexible(
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.6),
+                        child: ListView.separated(
+                          shrinkWrap: true,
+                          itemCount: dailyReports.length,
+                          separatorBuilder: (_, __) => const SizedBox(height: 10),
+                          itemBuilder: (context, index) {
+                            final report = dailyReports[index];
+                            String empFormattedId = _formatEmpId(report.empId, 'Salesman');
+
+                            return Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: _AdminPalette.border),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          report.firmName,
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 14,
+                                            color: _AdminPalette.inkDark,
+                                          ),
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                        decoration: BoxDecoration(
+                                          color: Colors.blue.shade50,
+                                          borderRadius: BorderRadius.circular(4),
+                                        ),
+                                        child: Text(
+                                          report.category,
+                                          style: TextStyle(
+                                            fontSize: 10,
+                                            color: Colors.blue.shade700,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Text(
+                                        "Product: ${report.productName}",
+                                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
+                                      ),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                        decoration: BoxDecoration(
+                                          color: _AdminPalette.primaryBrown.withOpacity(0.1),
+                                          borderRadius: BorderRadius.circular(4),
+                                        ),
+                                        child: Text(
+                                          empFormattedId,
+                                          style: const TextStyle(
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.bold,
+                                            color: _AdminPalette.primaryBrown,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Row(
+                                    children: [
+                                      Text(
+                                        "₹${report.price.toStringAsFixed(0)} × ${report.quantity}",
+                                        style: const TextStyle(fontSize: 12, color: Colors.grey),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Text(
+                                        "Total: ₹${report.totalAmount.toStringAsFixed(0)}",
+                                        style: const TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.bold,
+                                          color: Colors.green,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Row(
+                                    children: [
+                                      const Icon(Icons.phone, size: 12, color: Colors.grey),
+                                      const SizedBox(width: 4),
+                                      Text(report.mobile, style: const TextStyle(fontSize: 10, color: Colors.grey)),
+                                      const SizedBox(width: 10),
+                                      const Icon(Icons.access_time, size: 12, color: Colors.grey),
+                                      const SizedBox(width: 4),
+                                      Expanded(
+                                        child: Text(
+                                          report.createdAt,
+                                          style: const TextStyle(fontSize: 10, color: Colors.grey),
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                  const SizedBox(height: 10),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
   }
 
   // ==================== OPTION MENU ====================
@@ -683,7 +1819,10 @@ class _AdminDashboardState extends State<AdminDashboard> {
                   color: Colors.red,
                   borderRadius: BorderRadius.circular(12),
                 ),
-                child: const Text("3", style: TextStyle(color: Colors.white, fontSize: 12)),
+                child: Text(
+                  "${leaveList.where((l) => l.status == 'Pending').length}",
+                  style: const TextStyle(color: Colors.white, fontSize: 12),
+                ),
               ),
               onTap: () {
                 Navigator.pop(ctx);
@@ -756,6 +1895,8 @@ class _AdminDashboardState extends State<AdminDashboard> {
   }
 
   void _showNotificationsModal() {
+    final pendingLeaves = leaveList.where((l) => l.status == 'Pending').toList();
+
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -773,11 +1914,18 @@ class _AdminDashboardState extends State<AdminDashboard> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              _buildNotificationItem("New Salesman Registration", "Rahul Sharma registered as Salesman", "2 min ago", Colors.green),
-              const Divider(),
-              _buildNotificationItem("Leave Request Pending", "Amit Shah applied for leave", "1 hour ago", Colors.orange),
-              const Divider(),
-              _buildNotificationItem("New Order Received", "Order #103 from Super Stockist", "3 hours ago", Colors.blue),
+              if (pendingLeaves.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.all(16.0),
+                  child: Text("No pending notifications", style: TextStyle(color: Colors.grey)),
+                )
+              else
+                ...pendingLeaves.map((leave) => _buildNotificationItem(
+                  "Leave Request Pending",
+                  "${leave.empName} (${leave.empRole}) applied for ${leave.leaveType} leave\n${leave.startDate} - ${leave.endDate}",
+                  leave.reason,
+                  Colors.orange,
+                )).toList(),
             ],
           ),
         ),
@@ -791,7 +1939,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
     );
   }
 
-  Widget _buildNotificationItem(String title, String subtitle, String time, Color color) {
+  Widget _buildNotificationItem(String title, String subtitle, String reason, Color color) {
     return ListTile(
       contentPadding: EdgeInsets.zero,
       leading: CircleAvatar(
@@ -800,7 +1948,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
         child: Icon(Icons.circle, color: color, size: 12),
       ),
       title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-      subtitle: Text("$subtitle\n$time", style: const TextStyle(fontSize: 12, color: Colors.grey)),
+      subtitle: Text("$subtitle\nReason: $reason", style: const TextStyle(fontSize: 12, color: Colors.grey)),
     );
   }
 
@@ -1041,7 +2189,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
             ),
             onPressed: () {
-              Navigator.push(ctx, MaterialPageRoute(builder: (ctx) => Login()));
+              Navigator.push(ctx, MaterialPageRoute(builder: (ctx) => const Login()));
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(content: Text("Logged out successfully!")),
               );
@@ -1094,7 +2242,6 @@ class _AdminDashboardState extends State<AdminDashboard> {
                                   overflow: TextOverflow.ellipsis,
                                 ),
                               ),
-                              // History Icon to view all products
                               IconButton(
                                 icon: const Icon(Icons.history, color: Colors.blue),
                                 onPressed: () {
@@ -1257,63 +2404,64 @@ class _AdminDashboardState extends State<AdminDashboard> {
                     ],
                   ),
                   const SizedBox(height: 16),
-                  isLoadingCatalog
-                      ? const Center(child: CircularProgressIndicator())
-                      : productCatalog.isEmpty
-                      ? const Center(child: Text("No products found", style: TextStyle(color: Colors.grey)))
-                      : Flexible(
-                    child: ConstrainedBox(
-                      constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.55),
-                      child: ListView.builder(
-                        shrinkWrap: true,
-                        itemCount: productCatalog.length,
-                        itemBuilder: (context, index) {
-                          final p = productCatalog[index];
-                          return Card(
-                            color: Colors.white,
-                            margin: const EdgeInsets.only(bottom: 8),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                            child: Padding(
-                              padding: const EdgeInsets.all(12.0),
-                              child: Row(
-                                children: [
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
+                  if (isLoadingCatalog)
+                    const Center(child: CircularProgressIndicator())
+                  else if (productCatalog.isEmpty)
+                    const Center(child: Text("No products found", style: TextStyle(color: Colors.grey)))
+                  else
+                    Flexible(
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.55),
+                        child: ListView.builder(
+                          shrinkWrap: true,
+                          itemCount: productCatalog.length,
+                          itemBuilder: (context, index) {
+                            final p = productCatalog[index];
+                            return Card(
+                              color: Colors.white,
+                              margin: const EdgeInsets.only(bottom: 8),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                              child: Padding(
+                                padding: const EdgeInsets.all(12.0),
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(p.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                                          Text("${p.category} • ${p.subCategory}", style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                                          Text("₹${p.price.toStringAsFixed(2)}", style: const TextStyle(fontSize: 12, color: Colors.green, fontWeight: FontWeight.bold)),
+                                        ],
+                                      ),
+                                    ),
+                                    Row(
+                                      mainAxisSize: MainAxisSize.min,
                                       children: [
-                                        Text(p.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                                        Text("${p.category} • ${p.subCategory}", style: const TextStyle(fontSize: 11, color: Colors.grey)),
-                                        Text("₹${p.price.toStringAsFixed(2)}", style: const TextStyle(fontSize: 12, color: Colors.green, fontWeight: FontWeight.bold)),
+                                        IconButton(
+                                          icon: const Icon(Icons.edit, color: Colors.blue, size: 20),
+                                          onPressed: () {
+                                            Navigator.pop(ctx);
+                                            _showCatalogModal(editItem: p);
+                                          },
+                                        ),
+                                        IconButton(
+                                          icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20),
+                                          onPressed: () {
+                                            _deleteProduct(p.id);
+                                            Navigator.pop(ctx);
+                                          },
+                                        ),
                                       ],
                                     ),
-                                  ),
-                                  Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      IconButton(
-                                        icon: const Icon(Icons.edit, color: Colors.blue, size: 20),
-                                        onPressed: () {
-                                          Navigator.pop(ctx);
-                                          _showCatalogModal(editItem: p);
-                                        },
-                                      ),
-                                      IconButton(
-                                        icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20),
-                                        onPressed: () {
-                                          _deleteProduct(p.id);
-                                          Navigator.pop(ctx);
-                                        },
-                                      ),
-                                    ],
-                                  ),
-                                ],
+                                  ],
+                                ),
                               ),
-                            ),
-                          );
-                        },
+                            );
+                          },
+                        ),
                       ),
                     ),
-                  ),
                 ],
               ),
             ),
@@ -1363,68 +2511,71 @@ class _AdminDashboardState extends State<AdminDashboard> {
                 ],
               ),
               const SizedBox(height: 16),
-              isLoadingSalesmen
-                  ? const Center(child: CircularProgressIndicator())
-                  : salesmenList.isEmpty
-                  ? const Center(child: Text("No salesmen available", style: TextStyle(color: Colors.grey)))
-                  : Flexible(
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.55),
-                  child: ListView.builder(
-                    shrinkWrap: true,
-                    itemCount: salesmenList.length,
-                    itemBuilder: (context, index) {
-                      final sm = salesmenList[index];
-                      return Card(
-                        color: Colors.white,
-                        margin: const EdgeInsets.only(bottom: 8),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                        child: Padding(
-                          padding: const EdgeInsets.all(12.0),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  const CircleAvatar(
-                                    radius: 16,
-                                    backgroundColor: Color(0xFFEADBCE),
-                                    child: Icon(Icons.person, size: 16, color: _AdminPalette.primaryBrown),
-                                  ),
-                                  const SizedBox(width: 10),
-                                  Expanded(
-                                    child: Text(
-                                      "${sm.name} (${sm.empId})",
-                                      style: const TextStyle(fontWeight: FontWeight.bold),
+              if (isLoadingSalesmen)
+                const Center(child: CircularProgressIndicator())
+              else if (salesmenList.isEmpty)
+                const Center(child: Text("No salesmen available", style: TextStyle(color: Colors.grey)))
+              else
+                Flexible(
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.55),
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: salesmenList.length,
+                      itemBuilder: (context, index) {
+                        final sm = salesmenList[index];
+                        String formattedEmpId = _formatEmpId(sm.empId, sm.role);
+
+                        return Card(
+                          color: Colors.white,
+                          margin: const EdgeInsets.only(bottom: 8),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          child: Padding(
+                            padding: const EdgeInsets.all(12.0),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    const CircleAvatar(
+                                      radius: 16,
+                                      backgroundColor: Color(0xFFEADBCE),
+                                      child: Icon(Icons.person, size: 16, color: _AdminPalette.primaryBrown),
                                     ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 8),
-                              Row(
-                                children: [
-                                  const Icon(Icons.route, size: 16, color: _AdminPalette.primaryBrown),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: Text(
-                                      "Route: ${sm.assignedRoute.isNotEmpty ? sm.assignedRoute : 'Not assigned'}",
-                                      style: const TextStyle(fontSize: 12),
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: Text(
+                                        "${sm.name} ($formattedEmpId)",
+                                        style: const TextStyle(fontWeight: FontWeight.bold),
+                                      ),
                                     ),
-                                  ),
-                                  IconButton(
-                                    icon: const Icon(Icons.edit, size: 18, color: Colors.blue),
-                                    onPressed: () => _showAssignRouteModal(sm),
-                                  ),
-                                ],
-                              ),
-                            ],
+                                  ],
+                                ),
+                                const SizedBox(height: 8),
+                                Row(
+                                  children: [
+                                    const Icon(Icons.route, size: 16, color: _AdminPalette.primaryBrown),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        "Route: ${sm.assignedRoute.isNotEmpty ? sm.assignedRoute : 'Not assigned'}",
+                                        style: const TextStyle(fontSize: 12),
+                                      ),
+                                    ),
+                                    IconButton(
+                                      icon: const Icon(Icons.edit, size: 18, color: Colors.blue),
+                                      onPressed: () => _showAssignRouteModal(sm),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
                           ),
-                        ),
-                      );
-                    },
+                        );
+                      },
+                    ),
                   ),
                 ),
-              ),
               const SizedBox(height: 16),
             ],
           ),
@@ -1437,6 +2588,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
 
   void _showAssignRouteModal(SalesmanModel salesman) {
     final routeController = TextEditingController(text: salesman.assignedRoute);
+    String formattedEmpId = _formatEmpId(salesman.empId, salesman.role);
 
     showDialog(
       context: context,
@@ -1461,7 +2613,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
               ),
               const SizedBox(height: 8),
               Text(
-                "Assigning route for: ${salesman.name} (${salesman.empId})",
+                "Assigning route for: ${salesman.name} ($formattedEmpId)",
                 style: const TextStyle(fontSize: 13, color: Colors.grey),
               ),
               const SizedBox(height: 16),
@@ -1516,7 +2668,8 @@ class _AdminDashboardState extends State<AdminDashboard> {
     );
   }
 
-  // ==================== SALESMAN MANAGEMENT MODAL ====================
+  // ==================== SALESMAN MANAGEMENT MODAL WITH BHFSM-01 GENERATION ====================
+
   void _showSalesmenManagementModal({SalesmanModel? editItem}) {
     final nameCtrl = TextEditingController(text: editItem?.name ?? '');
     final phoneCtrl = TextEditingController(text: editItem?.phone ?? '');
@@ -1527,29 +2680,34 @@ class _AdminDashboardState extends State<AdminDashboard> {
     String selectedRole = editItem?.role ?? 'Salesman';
     bool isEditing = editItem != null;
 
-    // For displaying employee ID when editing - USE FROM DATABASE
-    String displayEmpId = editItem?.empId ?? '';
-
-    // Get role prefix for preview
     String getRolePrefix(String role) {
-      switch(role) {
-        case 'Salesman': return 'BHFSM';
-        case 'Sales Officer': return 'BHFSO';
-        case 'ASM': return 'BHFAS';
-        case 'RSM': return 'BHFRS';
-        case 'ZSM': return 'BHFZS';
-        case 'Sales Head': return 'BHFSH';
-        default: return 'BHFEMP';
+      switch (role) {
+        case 'Salesman':
+          return 'BHFSM';
+        case 'Sales Officer':
+          return 'BHFSO';
+        case 'ASM':
+          return 'BHFAS';
+        case 'RSM':
+          return 'BHFRS';
+        case 'ZSM':
+          return 'BHFZS';
+        case 'Sales Head':
+          return 'BHFSH';
+        default:
+          return 'BHFEMP';
       }
     }
 
-    // Get sample Employee ID for preview - based on existing data
-    String getSampleEmpId(String role) {
+    String generateEmpId(String role) {
       String prefix = getRolePrefix(role);
-      // Get count of existing users with this role
       int count = salesmenList.where((s) => s.role == role).length + 1;
-      return '$prefix:-${count.toString().padLeft(2, '0')}';
+      return '$prefix-${count.toString().padLeft(2, '0')}';
     }
+
+    String displayEmpId = isEditing
+        ? _formatEmpId(editItem.empId, editItem.role)
+        : generateEmpId(selectedRole);
 
     showModalBottomSheet(
       context: context,
@@ -1557,8 +2715,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
       backgroundColor: Colors.transparent,
       builder: (ctx) => StatefulBuilder(
         builder: (context, setModalState) {
-          // Calculate preview ID when role changes
-          String previewEmpId = getSampleEmpId(selectedRole);
+          String previewEmpId = isEditing ? displayEmpId : generateEmpId(selectedRole);
 
           return Container(
             decoration: const BoxDecoration(
@@ -1583,117 +2740,72 @@ class _AdminDashboardState extends State<AdminDashboard> {
                       children: [
                         Expanded(
                           child: Text(
-                            isEditing ? "Edit Salesman" : "Register New Salesman",
+                            isEditing ? "Edit Salesman Profile" : "Register New Salesman",
                             style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _AdminPalette.inkDark),
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
-                        // History Icon to view all salesmen
-                        IconButton(
-                          icon: const Icon(Icons.history, color: _AdminPalette.primaryBrown),
-                          onPressed: () {
-                            Navigator.pop(ctx);
-                            _showSalesmenHistoryModal();
-                          },
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              icon: const Icon(Icons.history, color: _AdminPalette.primaryBrown),
+                              onPressed: () {
+                                Navigator.pop(ctx);
+                                _showSalesmenHistoryModal();
+                              },
+                            ),
+                            IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(ctx)),
+                          ],
                         ),
-                        IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(ctx)),
                       ],
                     ),
-
-                    // Show Employee ID when editing - DISPLAY FROM DATABASE
-                    if (isEditing && displayEmpId.isNotEmpty && displayEmpId != '0') ...[
-                      const SizedBox(height: 8),
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                        decoration: BoxDecoration(
-                          color: _AdminPalette.primaryBrown.withOpacity(0.08),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: _AdminPalette.primaryBrown.withOpacity(0.3)),
-                        ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            const Text(
-                              "Employee ID:",
-                              style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600,
-                                color: _AdminPalette.inkDark,
-                              ),
-                            ),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                              decoration: BoxDecoration(
-                                color: _AdminPalette.primaryBrown,
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Text(
-                                displayEmpId,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 14,
-                                  letterSpacing: 0.8,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
+                    const SizedBox(height: 8),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      decoration: BoxDecoration(
+                        color: _AdminPalette.primaryBrown.withOpacity(0.08),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: _AdminPalette.primaryBrown.withOpacity(0.3)),
                       ),
-                      const SizedBox(height: 12),
-                    ],
-
-                    // Show preview Employee ID for new registration
-                    if (!isEditing) ...[
-                      const SizedBox(height: 8),
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                        decoration: BoxDecoration(
-                          color: Colors.blue.shade50,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: Colors.blue.shade200),
-                        ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Row(
-                              children: [
-                                Icon(Icons.badge, size: 20, color: Colors.blue.shade700),
-                                const SizedBox(width: 8),
-                                const Text(
-                                  "Will be generated as:",
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w500,
-                                    color: _AdminPalette.inkDark,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                              decoration: BoxDecoration(
-                                color: _AdminPalette.primaryBrown,
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Text(
-                                previewEmpId,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Row(
+                            children: [
+                              const Icon(Icons.badge, size: 20, color: _AdminPalette.primaryBrown),
+                              const SizedBox(width: 8),
+                              Text(
+                                isEditing ? "Employee ID:" : "Formatted Emp ID:",
                                 style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
                                   fontSize: 13,
-                                  letterSpacing: 0.8,
+                                  fontWeight: FontWeight.w600,
+                                  color: _AdminPalette.inkDark,
                                 ),
                               ),
+                            ],
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: _AdminPalette.primaryBrown,
+                              borderRadius: BorderRadius.circular(8),
                             ),
-                          ],
-                        ),
+                            child: Text(
+                              previewEmpId,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 13,
+                                letterSpacing: 0.8,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
-                      const SizedBox(height: 12),
-                    ],
-
+                    ),
+                    const SizedBox(height: 12),
                     TextFormField(
                       controller: nameCtrl,
                       validator: (v) => (v == null || v.trim().isEmpty) ? "Full Name is required" : null,
@@ -1749,10 +2861,12 @@ class _AdminDashboardState extends State<AdminDashboard> {
                               fillColor: Colors.white,
                               border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                             ),
-                            items: roleOptions.map((r) => DropdownMenuItem(
-                                value: r,
-                                child: Text(r, style: const TextStyle(fontSize: 14))
-                            )).toList(),
+                            items: roleOptions
+                                .map((r) => DropdownMenuItem(
+                              value: r,
+                              child: Text(r, style: const TextStyle(fontSize: 14)),
+                            ))
+                                .toList(),
                             onChanged: (v) {
                               if (v != null) {
                                 setModalState(() {
@@ -1776,14 +2890,11 @@ class _AdminDashboardState extends State<AdminDashboard> {
                         ),
                       ],
                     ),
-
-                    // Show role hint
                     const SizedBox(height: 4),
                     Text(
-                      "Role determines Employee ID prefix (e.g., BHFSM for Salesman, BHFSO for Sales Officer)",
+                      "Formatted Emp ID stored into manage_salesmna.php table (e.g. BHFSM-01)",
                       style: TextStyle(fontSize: 10, color: Colors.grey.shade600),
                     ),
-
                     const SizedBox(height: 10),
                     if (!isEditing) ...[
                       TextFormField(
@@ -1814,7 +2925,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                             final salesman = SalesmanModel(
                               id: editItem?.id ?? '',
                               name: nameCtrl.text.trim(),
-                              empId: editItem?.empId ?? '',
+                              empId: previewEmpId,
                               role: selectedRole,
                               city: cityCtrl.text.trim(),
                               phone: phoneCtrl.text.trim(),
@@ -1824,12 +2935,9 @@ class _AdminDashboardState extends State<AdminDashboard> {
                             );
 
                             if (isEditing) {
-                              // Update existing
                               salesman.id = editItem!.id;
-                              salesman.empId = editItem.empId;
                               _updateSalesman(salesman);
                             } else {
-                              // Add new - Employee ID will be generated by PHP
                               _addSalesman(salesman, passwordCtrl.text.isNotEmpty ? passwordCtrl.text : '123456');
                             }
                             Navigator.pop(ctx);
@@ -1856,356 +2964,255 @@ class _AdminDashboardState extends State<AdminDashboard> {
   void _showSalesmenHistoryModal() {
     showDialog(
       context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (context, setModalState) {
-          return Dialog(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-            backgroundColor: _AdminPalette.bgWarm,
-            insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-            child: Padding(
-              padding: const EdgeInsets.all(20.0),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Expanded(
-                        child: Row(
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return Dialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              backgroundColor: _AdminPalette.bgWarm,
+              insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+              child: Padding(
+                padding: const EdgeInsets.all(20.0),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Expanded(
+                          child: Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: _AdminPalette.primaryBrown.withOpacity(0.1),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: const Icon(Icons.people, color: _AdminPalette.primaryBrown),
+                              ),
+                              const SizedBox(width: 10),
+                              const Flexible(
+                                child: Text(
+                                  "Registered Members",
+                                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _AdminPalette.inkDark),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
                           children: [
-                            Container(
-                              padding: const EdgeInsets.all(8),
-                              decoration: BoxDecoration(
-                                color: _AdminPalette.primaryBrown.withOpacity(0.1),
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                              child: const Icon(Icons.people, color: _AdminPalette.primaryBrown),
+                            IconButton(
+                              icon: const Icon(Icons.refresh, color: _AdminPalette.primaryBrown),
+                              onPressed: () {
+                                _fetchSalesmenData().then((_) {
+                                  setModalState(() {});
+                                });
+                              },
+                              tooltip: "Refresh",
                             ),
-                            const SizedBox(width: 10),
-                            const Flexible(
-                              child: Text(
-                                "Registered Members",
-                                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _AdminPalette.inkDark),
-                                overflow: TextOverflow.ellipsis,
-                              ),
+                            IconButton(
+                              icon: const Icon(Icons.close),
+                              onPressed: () => Navigator.pop(ctx),
                             ),
                           ],
                         ),
-                      ),
-                      IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(ctx)),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  isLoadingSalesmen
-                      ? const Center(child: CircularProgressIndicator())
-                      : salesmenList.isEmpty
-                      ? const Center(child: Text("No registered members", style: TextStyle(color: Colors.grey)))
-                      : Flexible(
-                    child: ConstrainedBox(
-                      constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.55),
-                      child: ListView.builder(
-                        shrinkWrap: true,
-                        itemCount: salesmenList.length,
-                        itemBuilder: (context, index) {
-                          final sm = salesmenList[index];
-                          // IMPORTANT: Display emp_id from database
-                          String displayEmpId = (sm.empId.isNotEmpty && sm.empId != '0') ? sm.empId : 'N/A';
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    if (isLoadingSalesmen)
+                      const Center(child: CircularProgressIndicator())
+                    else if (salesmenList.isEmpty)
+                      const Center(child: Text("No registered members", style: TextStyle(color: Colors.grey)))
+                    else
+                      Flexible(
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxHeight: MediaQuery.of(context).size.height * 0.55,
+                          ),
+                          child: ListView.builder(
+                            shrinkWrap: true,
+                            itemCount: salesmenList.length,
+                            itemBuilder: (context, index) {
+                              final sm = salesmenList[index];
+                              String displayEmpId = _formatEmpId(sm.empId, sm.role);
 
-                          return Card(
-                            color: Colors.white,
-                            margin: const EdgeInsets.only(bottom: 10),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                            child: Padding(
-                              padding: const EdgeInsets.all(12.0),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
+                              return Card(
+                                color: Colors.white,
+                                margin: const EdgeInsets.only(bottom: 10),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                child: Padding(
+                                  padding: const EdgeInsets.all(12.0),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
-                                      CircleAvatar(
-                                        radius: 20,
-                                        backgroundColor: sm.isLive ? Colors.green.shade100 : Colors.red.shade100,
-                                        child: Icon(
-                                          Icons.person,
-                                          size: 20,
-                                          color: sm.isLive ? Colors.green : Colors.red,
-                                        ),
-                                      ),
-                                      const SizedBox(width: 12),
-                                      Expanded(
-                                        child: Column(
-                                          crossAxisAlignment: CrossAxisAlignment.start,
-                                          children: [
-                                            Row(
+                                      Row(
+                                        children: [
+                                          CircleAvatar(
+                                            radius: 20,
+                                            backgroundColor: sm.isLive ? Colors.green.shade100 : Colors.red.shade100,
+                                            child: Icon(
+                                              Icons.person,
+                                              size: 20,
+                                              color: sm.isLive ? Colors.green : Colors.red,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 12),
+                                          Expanded(
+                                            child: Column(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
                                               children: [
-                                                Text(
-                                                  sm.name,
-                                                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-                                                ),
-                                                const SizedBox(width: 8),
-                                                Container(
-                                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                                  decoration: BoxDecoration(
-                                                    color: _AdminPalette.primaryBrown,
-                                                    borderRadius: BorderRadius.circular(4),
-                                                  ),
-                                                  child: Text(
-                                                    displayEmpId,
-                                                    style: const TextStyle(
-                                                      color: Colors.white,
-                                                      fontSize: 9,
-                                                      fontWeight: FontWeight.bold,
-                                                    ),
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                            const SizedBox(height: 2),
-                                            Text(
-                                              "Role: ${sm.role} • City: ${sm.city}",
-                                              style: TextStyle(fontSize: 11, color: Colors.grey.shade700),
-                                            ),
-                                            Text(
-                                              "Phone: ${sm.phone} | Email: ${sm.email}",
-                                              style: TextStyle(fontSize: 10, color: Colors.grey.shade600),
-                                            ),
-                                            if (sm.assignedRoute.isNotEmpty)
-                                              Container(
-                                                margin: const EdgeInsets.only(top: 4),
-                                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                                decoration: BoxDecoration(
-                                                  color: Colors.teal.shade50,
-                                                  borderRadius: BorderRadius.circular(4),
-                                                  border: Border.all(color: Colors.teal.shade200),
-                                                ),
-                                                child: Row(
-                                                  mainAxisSize: MainAxisSize.min,
+                                                Row(
                                                   children: [
-                                                    Icon(Icons.route, size: 12, color: Colors.teal.shade700),
-                                                    const SizedBox(width: 4),
-                                                    Flexible(
+                                                    Text(
+                                                      sm.name,
+                                                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                                                    ),
+                                                    const SizedBox(width: 8),
+                                                    Container(
+                                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                                      decoration: BoxDecoration(
+                                                        color: _AdminPalette.primaryBrown,
+                                                        borderRadius: BorderRadius.circular(4),
+                                                      ),
                                                       child: Text(
-                                                        sm.assignedRoute,
-                                                        style: TextStyle(
-                                                          fontSize: 10,
-                                                          color: Colors.teal.shade700,
+                                                        displayEmpId,
+                                                        style: const TextStyle(
+                                                          color: Colors.white,
+                                                          fontSize: 9,
+                                                          fontWeight: FontWeight.bold,
                                                         ),
-                                                        overflow: TextOverflow.ellipsis,
                                                       ),
                                                     ),
                                                   ],
                                                 ),
-                                              ),
-                                          ],
-                                        ),
-                                      ),
-                                      Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          IconButton(
-                                            constraints: const BoxConstraints(),
-                                            padding: const EdgeInsets.all(6),
-                                            icon: const Icon(Icons.edit, color: Colors.blue, size: 18),
-                                            onPressed: () {
-                                              Navigator.pop(ctx);
-                                              _showSalesmenManagementModal(editItem: sm);
-                                            },
+                                                const SizedBox(height: 2),
+                                                Text(
+                                                  "Role: ${sm.role} • City: ${sm.city}",
+                                                  style: TextStyle(fontSize: 11, color: Colors.grey.shade700),
+                                                ),
+                                                Text(
+                                                  "Phone: ${sm.phone} | Email: ${sm.email}",
+                                                  style: TextStyle(fontSize: 10, color: Colors.grey.shade600),
+                                                ),
+                                                if (sm.assignedRoute.isNotEmpty)
+                                                  Container(
+                                                    margin: const EdgeInsets.only(top: 4),
+                                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                                    decoration: BoxDecoration(
+                                                      color: Colors.teal.shade50,
+                                                      borderRadius: BorderRadius.circular(4),
+                                                      border: Border.all(color: Colors.teal.shade200),
+                                                    ),
+                                                    child: Row(
+                                                      mainAxisSize: MainAxisSize.min,
+                                                      children: [
+                                                        Icon(Icons.route, size: 12, color: Colors.teal.shade700),
+                                                        const SizedBox(width: 4),
+                                                        Flexible(
+                                                          child: Text(
+                                                            sm.assignedRoute,
+                                                            style: TextStyle(
+                                                              fontSize: 10,
+                                                              color: Colors.teal.shade700,
+                                                            ),
+                                                            overflow: TextOverflow.ellipsis,
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                              ],
+                                            ),
                                           ),
-                                          IconButton(
-                                            constraints: const BoxConstraints(),
-                                            padding: const EdgeInsets.all(6),
-                                            icon: const Icon(Icons.delete_outline, color: Colors.red, size: 18),
-                                            onPressed: () {
-                                              _deleteSalesman(sm.empId);
-                                              Navigator.pop(ctx);
-                                            },
+                                          Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              IconButton(
+                                                constraints: const BoxConstraints(),
+                                                padding: const EdgeInsets.all(6),
+                                                icon: const Icon(Icons.edit, color: Colors.blue, size: 18),
+                                                onPressed: () {
+                                                  Navigator.pop(ctx);
+                                                  _showSalesmenManagementModal(editItem: sm);
+                                                },
+                                              ),
+                                              IconButton(
+                                                constraints: const BoxConstraints(),
+                                                padding: const EdgeInsets.all(6),
+                                                icon: const Icon(Icons.delete_outline, color: Colors.red, size: 18),
+                                                onPressed: () {
+                                                  _deleteSalesman(sm.empId);
+                                                  Navigator.pop(ctx);
+                                                },
+                                              ),
+                                            ],
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Row(
+                                        mainAxisAlignment: MainAxisAlignment.end,
+                                        children: [
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                            decoration: BoxDecoration(
+                                              color: sm.isLive ? Colors.green.shade50 : Colors.red.shade50,
+                                              borderRadius: BorderRadius.circular(4),
+                                            ),
+                                            child: Text(
+                                              sm.isLive ? "● Live" : "○ Offline",
+                                              style: TextStyle(
+                                                fontSize: 9,
+                                                fontWeight: FontWeight.bold,
+                                                color: sm.isLive ? Colors.green : Colors.red,
+                                              ),
+                                            ),
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Text(
+                                            "Updated: ${sm.lastUpdated}",
+                                            style: TextStyle(fontSize: 9, color: Colors.grey.shade500),
                                           ),
                                         ],
                                       ),
                                     ],
                                   ),
-                                  // Live Status
-                                  Row(
-                                    mainAxisAlignment: MainAxisAlignment.end,
-                                    children: [
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                        decoration: BoxDecoration(
-                                          color: sm.isLive ? Colors.green.shade50 : Colors.red.shade50,
-                                          borderRadius: BorderRadius.circular(4),
-                                        ),
-                                        child: Text(
-                                          sm.isLive ? "● Live" : "○ Offline",
-                                          style: TextStyle(
-                                            fontSize: 9,
-                                            fontWeight: FontWeight.bold,
-                                            color: sm.isLive ? Colors.green : Colors.red,
-                                          ),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Text(
-                                        "Updated: ${sm.lastUpdated}",
-                                        style: TextStyle(fontSize: 9, color: Colors.grey.shade500),
-                                      ),
-                                    ],
-                                  ),
-                                ],
-                              ),
-                            ),
-                          );
-                        },
+                                ),
+                              );
+                            },
+                          ),
+                        ),
                       ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          );
-        },
-      ),
-    );
-  }
-
-  // ==================== LEAVE MANAGEMENT MODAL ====================
-
-  void _showLeaveManagementModal() {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => StatefulBuilder(
-        builder: (context, setModalState) {
-          return Container(
-            decoration: const BoxDecoration(
-              color: _AdminPalette.bgWarm,
-              borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-            ),
-            padding: const EdgeInsets.all(20),
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Expanded(
+                    if (salesmenList.isNotEmpty) ...[
+                      const SizedBox(height: 10),
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: _AdminPalette.cardBg,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
                         child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceAround,
                           children: [
-                            Container(
-                              padding: const EdgeInsets.all(8),
-                              decoration: BoxDecoration(color: Colors.amber.shade50, borderRadius: BorderRadius.circular(10)),
-                              child: const Icon(Icons.time_to_leave, color: Colors.amber),
-                            ),
-                            const SizedBox(width: 10),
-                            const Flexible(
-                              child: Text("Leave Requests", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _AdminPalette.inkDark), overflow: TextOverflow.ellipsis),
-                            ),
+                            _buildLeaveStat("Total", salesmenList.length, Colors.grey),
+                            _buildLeaveStat("Live", salesmenList.where((s) => s.isLive).length, Colors.green),
+                            _buildLeaveStat("Offline", salesmenList.where((s) => !s.isLive).length, Colors.red),
                           ],
                         ),
                       ),
-                      IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(ctx)),
                     ],
-                  ),
-                  const SizedBox(height: 16),
-                  leaveList.isEmpty
-                      ? const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 20),
-                    child: Center(child: Text("No pending leave requests.", style: TextStyle(color: Colors.grey))),
-                  )
-                      : ConstrainedBox(
-                    constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.5),
-                    child: ListView.builder(
-                      shrinkWrap: true,
-                      itemCount: leaveList.length,
-                      itemBuilder: (ctx, idx) {
-                        final item = leaveList[idx];
-                        return Card(
-                          color: Colors.white,
-                          margin: const EdgeInsets.only(bottom: 10),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                          child: Padding(
-                            padding: const EdgeInsets.all(12.0),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    Expanded(
-                                      child: Text("${item.empName} (${item.empRole})", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14), overflow: TextOverflow.ellipsis),
-                                    ),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                      decoration: BoxDecoration(
-                                        color: item.status == 'Approved'
-                                            ? Colors.green.shade100
-                                            : item.status == 'Rejected'
-                                            ? Colors.red.shade100
-                                            : Colors.orange.shade100,
-                                        borderRadius: BorderRadius.circular(6),
-                                      ),
-                                      child: Text(
-                                        item.status,
-                                        style: TextStyle(
-                                          color: item.status == 'Approved'
-                                              ? Colors.green
-                                              : item.status == 'Rejected'
-                                              ? Colors.red
-                                              : Colors.orange,
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 4),
-                                Text("Date: ${item.date} | Reason: ${item.reason}", style: const TextStyle(fontSize: 12, color: Colors.black87)),
-                                if (item.status == 'Pending') ...[
-                                  const SizedBox(height: 8),
-                                  Row(
-                                    mainAxisAlignment: MainAxisAlignment.end,
-                                    children: [
-                                      OutlinedButton(
-                                        onPressed: () {
-                                          setState(() {
-                                            item.status = 'Rejected';
-                                          });
-                                          setModalState(() {});
-                                        },
-                                        style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
-                                        child: const Text("Reject"),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      ElevatedButton(
-                                        onPressed: () {
-                                          setState(() {
-                                            item.status = 'Approved';
-                                          });
-                                          setModalState(() {});
-                                        },
-                                        style: ElevatedButton.styleFrom(backgroundColor: _AdminPalette.primaryBrown),
-                                        child: const Text("Approve", style: TextStyle(color: Colors.white)),
-                                      ),
-                                    ],
-                                  ),
-                                ],
-                              ],
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                ],
+                    const SizedBox(height: 10),
+                  ],
+                ),
               ),
-            ),
-          );
-        },
-      ),
+            );
+          },
+        );
+      },
     );
   }
 
@@ -2250,104 +3257,124 @@ class _AdminDashboardState extends State<AdminDashboard> {
                           ],
                         ),
                       ),
-                      IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(ctx)),
+                      Row(
+                        children: [
+                          IconButton(
+                            icon: const Icon(Icons.refresh, color: _AdminPalette.primaryBrown),
+                            onPressed: () {
+                              _fetchSalesmenData().then((_) {
+                                setModalState(() {});
+                              });
+                            },
+                            tooltip: "Refresh",
+                          ),
+                          IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(ctx)),
+                        ],
+                      ),
                     ],
                   ),
                   const SizedBox(height: 16),
-                  Flexible(
-                    child: ConstrainedBox(
-                      constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.55),
-                      child: isLoadingSalesmen
-                          ? const Center(child: CircularProgressIndicator())
-                          : salesmenList.isEmpty
-                          ? const Center(child: Text("No salesmen available"))
-                          : ListView.builder(
-                        shrinkWrap: true,
-                        itemCount: salesmenList.length,
-                        itemBuilder: (context, index) {
-                          final sm = salesmenList[index];
-                          return Container(
-                            margin: const EdgeInsets.only(bottom: 10),
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: Colors.teal.shade50.withOpacity(0.4),
-                              borderRadius: BorderRadius.circular(16),
-                              border: Border.all(color: Colors.teal.shade100),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  children: [
-                                    const CircleAvatar(
-                                      radius: 20,
-                                      backgroundColor: Color(0xFFC8E6C9),
-                                      child: Icon(Icons.person, color: _AdminPalette.accentBadge),
-                                    ),
-                                    const SizedBox(width: 12),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
+                  if (isLoadingSalesmen)
+                    const Center(child: CircularProgressIndicator())
+                  else if (salesmenList.isEmpty)
+                    const Center(child: Text("No salesmen available"))
+                  else
+                    Flexible(
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.55),
+                        child: ListView.builder(
+                          shrinkWrap: true,
+                          itemCount: salesmenList.length,
+                          itemBuilder: (context, index) {
+                            final sm = salesmenList[index];
+                            String formattedEmpId = _formatEmpId(sm.empId, sm.role);
+
+                            return Container(
+                              margin: const EdgeInsets.only(bottom: 10),
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Colors.teal.shade50.withOpacity(0.4),
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(color: Colors.teal.shade100),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      const CircleAvatar(
+                                        radius: 20,
+                                        backgroundColor: Color(0xFFC8E6C9),
+                                        child: Icon(Icons.person, color: _AdminPalette.accentBadge),
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text("${sm.name} (${sm.role})", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14), overflow: TextOverflow.ellipsis),
+                                            Text("ID: $formattedEmpId", style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                                          ],
+                                        ),
+                                      ),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                        decoration: BoxDecoration(
+                                          color: sm.isLive ? Colors.green.shade100 : Colors.red.shade100,
+                                          borderRadius: BorderRadius.circular(8),
+                                        ),
+                                        child: Text(
+                                          sm.isLive ? "Live" : "Offline",
+                                          style: TextStyle(
+                                            color: sm.isLive ? Colors.green : Colors.red,
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 11,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  if (sm.liveLocation.isNotEmpty || (sm.latitude != null && sm.longitude != null)) ...[
+                                    Container(
+                                      padding: const EdgeInsets.all(8),
+                                      decoration: BoxDecoration(
+                                        color: Colors.blue.shade50,
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: Row(
                                         children: [
-                                          Text("${sm.name} (${sm.role})", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14), overflow: TextOverflow.ellipsis),
-                                          Text("ID: ${sm.empId}", style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                                          const Icon(Icons.location_on, size: 16, color: Colors.blue),
+                                          const SizedBox(width: 8),
+                                          Expanded(
+                                            child: Text(
+                                              sm.liveLocation.isNotEmpty
+                                                  ? "Live: ${sm.liveLocation}"
+                                                  : (sm.latitude != null && sm.longitude != null)
+                                                  ? "Lat: ${sm.latitude!.toStringAsFixed(6)}, Lng: ${sm.longitude!.toStringAsFixed(6)}"
+                                                  : "No location data",
+                                              style: const TextStyle(fontSize: 12),
+                                            ),
+                                          ),
                                         ],
                                       ),
                                     ),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                      decoration: BoxDecoration(
-                                        color: sm.isLive ? Colors.green.shade100 : Colors.red.shade100,
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                      child: Text(
-                                        sm.isLive ? "Live" : "Offline",
-                                        style: TextStyle(
-                                          color: sm.isLive ? Colors.green : Colors.red,
-                                          fontWeight: FontWeight.bold,
-                                          fontSize: 11,
-                                        ),
-                                      ),
-                                    ),
+                                    const SizedBox(height: 6),
                                   ],
-                                ),
-                                const SizedBox(height: 8),
-                                if (sm.liveLocation.isNotEmpty) ...[
-                                  Container(
-                                    padding: const EdgeInsets.all(8),
-                                    decoration: BoxDecoration(
-                                      color: Colors.blue.shade50,
-                                      borderRadius: BorderRadius.circular(8),
-                                    ),
-                                    child: Row(
-                                      children: [
-                                        const Icon(Icons.location_on, size: 16, color: Colors.blue),
-                                        const SizedBox(width: 8),
-                                        Expanded(
-                                          child: Text(
-                                            "Live: ${sm.liveLocation}",
-                                            style: const TextStyle(fontSize: 12),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Text("City: ${sm.city}", style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                                      Text("Updated: ${sm.lastUpdated}", style: const TextStyle(fontSize: 10, color: Colors.grey)),
+                                    ],
                                   ),
-                                  const SizedBox(height: 6),
                                 ],
-                                Row(
-                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    Text("City: ${sm.city}", style: const TextStyle(fontSize: 11, color: Colors.grey)),
-                                    Text("Updated: ${sm.lastUpdated}", style: const TextStyle(fontSize: 10, color: Colors.grey)),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          );
-                        },
+                              ),
+                            );
+                          },
+                        ),
                       ),
                     ),
-                  ),
                 ],
               ),
             ),
@@ -2472,7 +3499,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                 ],
               ),
             ),
-        
+
             // Content Body
             Expanded(
               child: isLoadingSalesmen
@@ -2484,7 +3511,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Stats Row
+                    // Stats Summary Row
                     Container(
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
@@ -2502,58 +3529,39 @@ class _AdminDashboardState extends State<AdminDashboard> {
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.spaceAround,
                         children: [
-                          Expanded(
-                            child: InkWell(
-                              onTap: () => _showSalesmenManagementModal(),
-                              child: _buildBodyStat("${salesmenList.length}", "Salesmen", Icons.people_alt_outlined, Colors.purple),
-                            ),
-                          ),
-                          Container(height: 30, width: 1, color: Colors.black12),
-                          Expanded(
-                            child: InkWell(
-                              onTap: () => _showLeaveManagementModal(),
-                              child: _buildBodyStat("${leaveList.length}", "Leaves", Icons.time_to_leave, Colors.amber.shade800),
-                            ),
-                          ),
-                          Container(height: 30, width: 1, color: Colors.black12),
-                          Expanded(
-                            child: InkWell(
-                              onTap: () => _showCatalogModal(),
-                              child: _buildBodyStat("${productCatalog.length}", "Products", Icons.inventory_2, Colors.blue),
-                            ),
-                          ),
+                          _buildBodyStat("${salesmenList.length}", "Staff", Icons.people, _AdminPalette.primaryBrown),
+                          Container(height: 30, width: 1, color: _AdminPalette.border),
+                          _buildBodyStat("${salesmenList.where((s) => s.isLive).length}", "Live", Icons.sensors, Colors.green),
+                          Container(height: 30, width: 1, color: _AdminPalette.border),
+                          _buildBodyStat("${productCatalog.length}", "Items", Icons.inventory_2, Colors.blue),
+                          Container(height: 30, width: 1, color: _AdminPalette.border),
+                          _buildBodyStat("${leaveList.where((l) => l.status == 'Pending').length}", "Pending", Icons.hourglass_top, Colors.amber.shade800),
                         ],
                       ),
                     ),
-                    const SizedBox(height: 24),
-        
-                    // Quick Actions Section Title
-                    Row(
-                      children: [
-                        Container(width: 4, height: 18, color: _AdminPalette.primaryBrown),
-                        const SizedBox(width: 8),
-                        const Text("Quick Actions", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _AdminPalette.inkDark)),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-        
-                    // Grid of Action Cards
+
+                    const SizedBox(height: 20),
+
+                    // Management Action Grid
                     GridView.count(
                       crossAxisCount: 2,
                       shrinkWrap: true,
                       physics: const NeverScrollableScrollPhysics(),
-                      crossAxisSpacing: 16,
-                      mainAxisSpacing: 16,
-                      childAspectRatio: 1.15,
+                      crossAxisSpacing: 12,
+                      mainAxisSpacing: 12,
+                      childAspectRatio: 1.5,
                       children: [
-                        _buildActionCard("Catalog", Icons.inventory_2_outlined, Colors.blue, _showCatalogModal),
-                        _buildActionCard("Live Map", Icons.map_outlined, Colors.teal, _showLiveTrackingModal),
-                        _buildActionCard("Manage Team", Icons.manage_accounts_outlined, Colors.purple, () => _showSalesmenManagementModal()),
-                        _buildActionCard("Manage Leave", Icons.time_to_leave_outlined, Colors.amber.shade800, _showLeaveManagementModal),
-                        _buildActionCard("Routes", Icons.route_outlined, Colors.teal, _showRouteManagementModal),
+                        _buildActionCard("Manage Salesmen", Icons.person_add_alt_1, _AdminPalette.primaryBrown, _showSalesmenManagementModal),
+                        _buildActionCard("Product Catalog", Icons.inventory, Colors.blue, _showCatalogModal),
+                        _buildActionCard("Assign Routes", Icons.alt_route, Colors.teal, _showRouteManagementModal),
+                        _buildActionCard("Live Tracking", Icons.my_location, Colors.green, _showLiveTrackingModal),
                       ],
                     ),
-                    const SizedBox(height: 8),
+
+                    const SizedBox(height: 20),
+
+                    // Activity & Management Card - Opens Dialog View
+                    _buildActivityManagementCard(),
                   ],
                 ),
               ),
@@ -2564,70 +3572,105 @@ class _AdminDashboardState extends State<AdminDashboard> {
     );
   }
 
-  Widget _buildBodyStat(String value, String label, IconData icon, Color color) {
-    return Column(
-      children: [
-        Container(
-          padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(10)),
-          child: Icon(icon, color: color, size: 20),
-        ),
-        const SizedBox(height: 6),
-        Text(value, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: _AdminPalette.inkDark), overflow: TextOverflow.ellipsis),
-        Text(label, style: const TextStyle(fontSize: 10, color: Colors.grey), overflow: TextOverflow.ellipsis),
-      ],
-    );
-  }
+  // Activity & Management Card (Opens Dialog)
+  Widget _buildActivityManagementCard() {
+    int pendingLeavesCount = leaveList.where((l) => l.status == 'Pending').length;
 
-  Widget _buildActionCard(String title, IconData icon, Color color, VoidCallback onTap) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(20),
-      child: Container(
-        decoration: BoxDecoration(
-          color: _AdminPalette.cardBg,
+    return Container(
+      decoration: BoxDecoration(
+        color: _AdminPalette.cardBg,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: _AdminPalette.border),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.03),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          )
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: _showActivityManagementDialog,
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: _AdminPalette.border),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.02),
-              blurRadius: 10,
-              offset: const Offset(0, 4),
-            )
-          ],
-        ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            CircleAvatar(
-              radius: 26,
-              backgroundColor: color.withOpacity(0.1),
-              child: Icon(icon, color: color, size: 26),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: _AdminPalette.primaryBrown.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: const Icon(
+                    Icons.dashboard_customize,
+                    color: _AdminPalette.primaryBrown,
+                    size: 32,
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        "Activity & Management",
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: _AdminPalette.inkDark,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        "Leaves • Attendance • Reports",
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey.shade600,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          if (pendingLeavesCount > 0) ...[
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Colors.amber.shade100,
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: Text(
+                                "$pendingLeavesCount Pending",
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.amber.shade800,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                          ],
+                          Text(
+                            "${attendanceHistory.length} Attendance • ${dailyReports.length} Reports",
+                            style: TextStyle(fontSize: 10, color: Colors.grey.shade500),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                const Icon(
+                  Icons.arrow_forward_ios,
+                  size: 18,
+                  color: _AdminPalette.primaryBrown,
+                ),
+              ],
             ),
-            const SizedBox(height: 12),
-            Text(title, style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: color.withOpacity(0.9)), overflow: TextOverflow.ellipsis),
-          ],
+          ),
         ),
       ),
     );
   }
-}
-
-// Leave Request Model
-class LeaveRequest {
-  final String id;
-  final String empName;
-  final String empRole;
-  final String date;
-  final String reason;
-  String status;
-
-  LeaveRequest({
-    required this.id,
-    required this.empName,
-    required this.empRole,
-    required this.date,
-    required this.reason,
-    this.status = 'Pending',
-  });
 }

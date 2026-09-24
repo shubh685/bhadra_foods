@@ -38,7 +38,7 @@ class _RegisterationState extends State<Registeration>
   final mobileController = TextEditingController();
   final passwordController = TextEditingController();
 
-  static const String registerApiUrl = 'http://192.168.0.102/bhadra_foods/register.php';
+  static const String registerApiUrl = 'http://192.168.0.115/bhadra_foods/register.php';
 
   final List<String> roles = ['Admin'];
 
