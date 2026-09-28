@@ -14,7 +14,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'Log_In.dart';
 
 // API Base URL
-const String API_BASE_URL = 'http://192.168.0.115/bhadra_foods/';
+const String API_BASE_URL = 'http://192.168.0.104/bhadra_foods/';
 
 class _AdminPalette {
   static const darkHeaderTop = Color(0xFF381C00);

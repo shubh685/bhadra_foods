@@ -16,7 +16,7 @@ class _AdminPalette {
 }
 
 // API Base URL
-const String API_BASE_URL = 'http://192.168.0.115/bhadra_foods/';
+const String API_BASE_URL = 'http://192.168.0.104/bhadra_foods/';
 
 // Model for Admin User
 class AdminModel {
