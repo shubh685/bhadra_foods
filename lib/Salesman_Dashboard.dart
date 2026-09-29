@@ -67,7 +67,7 @@ class DashboardScreen extends StatefulWidget {
   const DashboardScreen({
     super.key,
     this.loggedInRole = 'Salesman',
-    this.loggedInUserId = 'BHFSM:-01',
+    this.loggedInUserId = 'BHFSM-01',
     this.loggedInUserName = 'Shubham Shah',
     this.email = "shubham@bhadrafoods.com",
   });
@@ -103,15 +103,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   List<Map<String, dynamic>> attendanceHistory = [];
 
   final ImagePicker _picker = ImagePicker();
-  final FaceDetector _faceDetector = FaceDetector(
-    options: FaceDetectorOptions(
-      performanceMode: FaceDetectorMode.fast,
-      enableLandmarks: true,
-      enableContours: true,
-      enableClassification: true,
-      minFaceSize: 0.1,
-    ),
-  );
+  FaceDetector? _faceDetector;
+  bool _faceDetectorInitialized = false;
 
   final _taskFormKey = GlobalKey<FormState>();
   final _firmNameController = TextEditingController();
@@ -138,13 +131,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
   DateTimeRange? _selectedLeaveDateRange;
   List<Map<String, dynamic>> leaveHistory = [];
 
-  // Daily Reports
+  // Daily Reports & Company Firms
   List<Map<String, dynamic>> dailyTaskHistory = [];
-  List<HierarchyUserLocation> hierarchyData = [];
   List<dynamic> hierarchyList = [];
   bool isLoadingHierarchy = true;
 
-  // Visibility Mapping based on Roles
+  // Registered firms cache for dropdown
+  Set<String> _registeredFirms = {};
+  bool _isAddingNewFirm = false;
+  String? _selectedFirm;
+
+  // Role visibility map (Determines Hierarchy Logic)
   Map<String, List<String>> get roleVisibilityMap => {
     'Salesman': ['Salesman'],
     'Sales Officer': ['Salesman', 'Sales Officer'],
@@ -167,9 +164,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final startTime = 9 * 60;
     final endTime = 18 * 60;
 
-    if (now.weekday == DateTime.sunday) {
-      return false;
-    }
+    if (now.weekday == DateTime.sunday) return false;
     return currentTimeInMinutes >= startTime && currentTimeInMinutes <= endTime;
   }
 
@@ -181,12 +176,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (now.weekday == DateTime.sunday) {
       return "⛔ Sunday - Punch Out Restricted";
     }
-
     if (currentTimeInMinutes < 9 * 60) {
       final remaining = (9 * 60) - currentTimeInMinutes;
       return "⏳ Punch Out starts at 9 AM (${remaining ~/ 60}h ${remaining % 60}m left)";
-    } else if (currentTimeInMinutes > endTime) {
-      return "⛔ Punch Out closed (After 6 PM)";
+    } else if (currentTimeInMinutes >= endTime) {
+      return "✅ Time for Auto Punch Out (After 6 PM)";
     } else {
       final remaining = endTime - currentTimeInMinutes;
       return "✅ Punch Out available (${remaining ~/ 60}h ${remaining % 60}m left)";
@@ -203,6 +197,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     _clockStream = Stream.periodic(const Duration(seconds: 1), (_) => DateTime.now());
 
+    _initFaceDetector();
     _initLiveGpsTracking();
     _start1MinLocationTimer();
     _startPunchCheckTimer();
@@ -215,6 +210,26 @@ class _DashboardScreenState extends State<DashboardScreen> {
     fetchHierarchyAndRoutes();
   }
 
+  Future<void> _initFaceDetector() async {
+    try {
+      _faceDetector = FaceDetector(
+        options: FaceDetectorOptions(
+          performanceMode: FaceDetectorMode.fast,
+          enableLandmarks: true,
+          enableContours: true,
+          enableClassification: true,
+          minFaceSize: 0.1,
+        ),
+      );
+      _faceDetectorInitialized = true;
+    } catch (e) {
+      debugPrint("Face detector init error: $e");
+    }
+  }
+
+  // ============================================================
+  // HIERARCHY & LIVE LOCATION
+  // ============================================================
   Future<void> fetchHierarchyAndRoutes() async {
     try {
       final response = await http.get(
@@ -223,20 +238,56 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
       if (response.statusCode == 200) {
         final jsonResponse = jsonDecode(response.body);
-        if (jsonResponse['status'] == true) {
-          setState(() {
-            hierarchyList = jsonResponse['data'] ?? [];
-            isLoadingHierarchy = false;
-          });
+        if (jsonResponse['status'] == true || jsonResponse['status'] == 'success') {
+          final List data = jsonResponse['data'] ?? [];
+          final visibleRoles = roleVisibilityMap[userRole] ?? [userRole];
+
+          final filtered = data.where((item) {
+            final role = item['role']?.toString() ?? '';
+            return visibleRoles.contains(role);
+          }).toList();
+
+          if (mounted) {
+            setState(() {
+              hierarchyList = filtered;
+              isLoadingHierarchy = false;
+            });
+          }
+        } else {
+          if (mounted) setState(() => isLoadingHierarchy = false);
         }
       }
     } catch (e) {
       debugPrint("Error fetching live hierarchy: $e");
-      if (mounted) {
-        setState(() {
-          isLoadingHierarchy = false;
-        });
+      if (mounted) setState(() => isLoadingHierarchy = false);
+    }
+  }
+
+  Future<void> _refreshHierarchyLiveLocations() async {
+    try {
+      final response = await http.get(
+        Uri.parse('${API_BASE_URL}manage_salesman.php'),
+      );
+
+      if (response.statusCode == 200) {
+        final jsonResponse = jsonDecode(response.body);
+        if (jsonResponse['status'] == true || jsonResponse['status'] == 'success') {
+          final List data = jsonResponse['data'] ?? [];
+          final visibleRoles = roleVisibilityMap[userRole] ?? [userRole];
+          final filtered = data.where((item) {
+            final role = item['role']?.toString() ?? '';
+            return visibleRoles.contains(role);
+          }).toList();
+
+          if (mounted) {
+            setState(() {
+              hierarchyList = filtered;
+            });
+          }
+        }
       }
+    } catch (e) {
+      debugPrint("Hierarchy live refresh error: $e");
     }
   }
 
@@ -245,7 +296,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _positionStreamSub?.cancel();
     _minuteLocationTimer?.cancel();
     _punchCheckTimer?.cancel();
-    _faceDetector.close();
+    try {
+      _faceDetector?.close();
+    } catch (_) {}
     _firmNameController.dispose();
     _mobileController.dispose();
     _pinCodeController.dispose();
@@ -412,17 +465,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         if (newController.text.isNotEmpty &&
                             newController.text == confirmController.text &&
                             newController.text.length >= 4) {
-                          _changePassword(
-                              userId,
-                              userRole,
-                              oldController.text,
-                              newController.text
-                          );
+                          _changePassword(userId, userRole, oldController.text,
+                              newController.text);
                           Navigator.pop(ctx);
                         } else if (newController.text.length < 4) {
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
-                                content: Text("Password must be at least 4 characters!")),
+                                content: Text(
+                                    "Password must be at least 4 characters!")),
                           );
                         } else {
                           ScaffoldMessenger.of(context).showSnackBar(
@@ -447,7 +497,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Future<void> _changePassword(String identifier, String role, String oldPassword, String newPassword) async {
+  Future<void> _changePassword(String identifier, String role,
+      String oldPassword, String newPassword) async {
     try {
       final response = await http.post(
         Uri.parse('${API_BASE_URL}change_password.php'),
@@ -488,10 +539,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
       );
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        if (data['status'] == true && data['data'] != null) {
+        if ((data['status'] == true || data['status'] == 'success') &&
+            data['data'] != null) {
           final users = data['data'] as List;
           for (var user in users) {
-            if (user['emp_id'].toString() == userId) {
+            if (user['emp_id']?.toString() == userId) {
               if (mounted) {
                 setState(() {
                   assignedRoute = user['assigned_route'] ?? 'Not Assigned';
@@ -512,7 +564,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
       final response = await http.get(Uri.parse("${API_BASE_URL}catelog.php"));
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        if (data['status'] == true && data['data'] != null) {
+        if ((data['status'] == true || data['status'] == 'success') &&
+            data['data'] != null) {
           rawProductList = List<Map<String, dynamic>>.from(data['data']);
           Map<String, List<Map<String, dynamic>>> tempCatalog = {};
 
@@ -606,31 +659,36 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // Attendance Status & History Fetching
+  // ============================================================
+  // ATTENDANCE — FIXED for get_attendance.php
+  // ============================================================
   Future<void> _fetchAttendanceStatus() async {
     try {
       final response = await http
           .get(Uri.parse("${API_BASE_URL}get_attendance.php?emp_id=$userId"));
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        if (data['status'] == 'success' && mounted) {
+
+        if (data['status'] == true && mounted) {
+          final List history = data['history'] ?? data['data'] ?? [];
+
+          String? latestPunchType;
+          if (history.isNotEmpty) {
+            latestPunchType = history.first['punch_type']?.toString();
+          }
+
           setState(() {
-            if (data['attendance'] != null) {
-              isCheckedIn = data['attendance']['punch_type'] == 'PUNCH_IN';
-              lastPunchType = data['attendance']['punch_type'];
-              capturedPhotoUrl = data['attendance']['photo'];
-              lastPunchDate = data['attendance']['punch_date'];
-              lastPunchTime = data['attendance']['punch_time'];
-              lastPunchDay = data['attendance']['day'];
+            attendanceHistory = List<Map<String, dynamic>>.from(history);
+            isCheckedIn = latestPunchType == 'PUNCH_IN';
+
+            if (history.isNotEmpty) {
+              final latest = history.first;
+              lastPunchType = latest['punch_type'];
+              capturedPhotoUrl = latest['photo'];
+              lastPunchDate = latest['punch_date'];
+              lastPunchTime = latest['punch_time'];
+              lastPunchDay = latest['day'];
             }
-            if (data['history'] != null) {
-              attendanceHistory = List<Map<String, dynamic>>.from(data['history']);
-            }
-          });
-        } else if (mounted) {
-          setState(() {
-            isCheckedIn = false;
-            lastPunchType = null;
           });
         }
       }
@@ -640,91 +698,110 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   void _showAttendanceHistoryModal() {
+    _fetchAttendanceStatus();
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
-      builder: (ctx) => Container(
-        height: MediaQuery.of(context).size.height * 0.75,
-        decoration: const BoxDecoration(
-          color: _AdminPalette.bgWarm,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-        ),
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text("Attendance History",
-                    style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        color: _AdminPalette.inkDark)),
-                IconButton(
-                  icon: const Icon(Icons.close),
-                  onPressed: () => Navigator.pop(ctx),
-                )
-              ],
-            ),
-            const Divider(),
-            Expanded(
-              child: attendanceHistory.isEmpty
-                  ? const Center(child: Text("No attendance history found"))
-                  : ListView.builder(
-                itemCount: attendanceHistory.length,
-                itemBuilder: (ctx, idx) {
-                  final item = attendanceHistory[idx];
-                  final isPunchIn = item['punch_type'] == 'PUNCH_IN';
-                  final photo = item['photo'];
-
-                  return Card(
-                    color: _AdminPalette.cardBg,
-                    margin: const EdgeInsets.symmetric(vertical: 6),
-                    child: ListTile(
-                      leading: CircleAvatar(
-                        backgroundColor: isPunchIn ? Colors.green.shade100 : Colors.red.shade100,
-                        child: Icon(
-                          isPunchIn ? Icons.login : Icons.logout,
-                          color: isPunchIn ? Colors.green : Colors.red,
-                        ),
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setModalState) => Container(
+          height: MediaQuery.of(context).size.height * 0.75,
+          decoration: const BoxDecoration(
+            color: _AdminPalette.bgWarm,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text("Attendance History",
+                      style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: _AdminPalette.inkDark)),
+                  Row(
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.refresh, color: _AdminPalette.primaryBrown),
+                        onPressed: () async {
+                          await _fetchAttendanceStatus();
+                          setModalState(() {});
+                        },
+                        tooltip: "Refresh",
                       ),
-                      title: Text(
-                        isPunchIn ? "Punch In" : "Punch Out",
-                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                      IconButton(
+                        icon: const Icon(Icons.close),
+                        onPressed: () => Navigator.pop(ctx),
                       ),
-                      subtitle: Text(
-                        "📅 ${item['punch_date'] ?? ''} 🕐 ${item['punch_time'] ?? ''}\n📆 ${item['day'] ?? ''}",
-                        style: const TextStyle(fontSize: 12),
-                      ),
-                      trailing: photo != null && photo.toString().isNotEmpty
-                          ? ClipRRect(
-                        borderRadius: BorderRadius.circular(8),
-                        child: Image.network(
-                          photo.toString().startsWith('http')
-                              ? photo.toString()
-                              : '${API_BASE_URL}${photo.toString()}',
-                          width: 50,
-                          height: 50,
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) => const Icon(Icons.person, size: 40),
-                        ),
-                      )
-                          : null,
-                    ),
-                  );
-                },
+                    ],
+                  )
+                ],
               ),
-            )
-          ],
+              const Divider(),
+              Expanded(
+                child: attendanceHistory.isEmpty
+                    ? const Center(child: Text("No attendance history found"))
+                    : ListView.builder(
+                  itemCount: attendanceHistory.length,
+                  itemBuilder: (ctx, idx) {
+                    final item = attendanceHistory[idx];
+                    final isPunchIn = item['punch_type'] == 'PUNCH_IN';
+                    final photo = item['photo'];
+
+                    return Card(
+                      color: _AdminPalette.cardBg,
+                      margin: const EdgeInsets.symmetric(vertical: 6),
+                      child: ListTile(
+                        leading: CircleAvatar(
+                          backgroundColor: isPunchIn
+                              ? Colors.green.shade100
+                              : Colors.red.shade100,
+                          child: Icon(
+                            isPunchIn ? Icons.login : Icons.logout,
+                            color: isPunchIn ? Colors.green : Colors.red,
+                          ),
+                        ),
+                        title: Text(
+                          isPunchIn ? "Punch In" : "Punch Out",
+                          style: const TextStyle(
+                              fontWeight: FontWeight.bold, fontSize: 14),
+                        ),
+                        subtitle: Text(
+                          "📅 ${item['punch_date'] ?? ''} 🕐 ${item['punch_time'] ?? ''}\n📆 ${item['day'] ?? ''}",
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                        trailing: photo != null && photo.toString().isNotEmpty
+                            ? ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: Image.network(
+                            photo.toString().startsWith('http')
+                                ? photo.toString()
+                                : '${API_BASE_URL}${photo.toString()}',
+                            width: 50,
+                            height: 50,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, __, ___) =>
+                            const Icon(Icons.person, size: 40),
+                          ),
+                        )
+                            : null,
+                      ),
+                    );
+                  },
+                ),
+              )
+            ],
+          ),
         ),
       ),
     );
   }
 
-  // Submit Punch API
-  Future<void> _submitPunchApi(File photoFile, String punchType) async {
+  // Submit Punch API — passing explicit device time
+  Future<void> _submitPunchApi(File photoFile, String punchType, {bool isAuto = false}) async {
     try {
       var request = http.MultipartRequest(
           "POST", Uri.parse("${API_BASE_URL}punch_attendance.php"));
@@ -734,31 +811,37 @@ class _DashboardScreenState extends State<DashboardScreen> {
       request.fields['latitude'] = (currentLatitude ?? 0.0).toString();
       request.fields['longitude'] = (currentLongitude ?? 0.0).toString();
 
-      request.files
-          .add(await http.MultipartFile.fromPath('photo', photoFile.path));
+      // Pass proper device time as requested
+      request.fields['device_date'] = DateFormat('yyyy-MM-dd').format(DateTime.now());
+      request.fields['device_time'] = DateFormat('HH:mm:ss').format(DateTime.now());
+      request.fields['is_auto'] = isAuto ? '1' : '0';
+
+      if (photoFile.path.isNotEmpty) {
+        request.files.add(await http.MultipartFile.fromPath('photo', photoFile.path));
+      }
 
       var streamedResponse = await request.send();
       var response = await http.Response.fromStream(streamedResponse);
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        if (data['status'] == 'success') {
+        if (data['status'] == 'success' || data['status'] == true) {
           if (mounted) {
             setState(() {
               isCheckedIn = (punchType == 'PUNCH_IN');
-              capturedImageFile = photoFile;
+              if (!isAuto) capturedImageFile = photoFile;
               lastPunchType = punchType;
-              capturedPhotoUrl = data['photo_url'];
-              lastPunchDate = data['punch_date'];
-              lastPunchTime = data['punch_time'];
-              lastPunchDay = data['day'];
+              capturedPhotoUrl = data['photo_url'] ?? capturedPhotoUrl;
+              lastPunchDate = data['punch_date'] ?? DateFormat('yyyy-MM-dd').format(DateTime.now());
+              lastPunchTime = data['punch_time'] ?? DateFormat('HH:mm:ss').format(DateTime.now());
+              lastPunchDay = data['day'] ?? DateFormat('EEEE').format(DateTime.now());
             });
           }
           if (!mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               backgroundColor: Colors.green,
-              content: Text(data['message'] ?? 'Punch recorded successfully!'),
+              content: Text(data['message'] ?? (isAuto ? 'Auto-Punched out successfully!' : 'Punch recorded successfully!')),
             ),
           );
           _fetchAttendanceStatus();
@@ -782,10 +865,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  // Leave Management
-  // ==================== LEAVE MANAGEMENT (SALESMAN) ====================
-
-// Fetch leave history for the logged-in salesman
+  // ============================================================
+  // LEAVE MANAGEMENT
+  // ============================================================
   Future<void> _fetchLeaveHistory() async {
     try {
       final response = await http.get(
@@ -794,53 +876,48 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        if (data['status'] == 'success' && mounted) {
+        if ((data['status'] == true || data['status'] == 'success') && mounted) {
           setState(() {
-            leaveHistory = List<Map<String, dynamic>>.from(data['leaves']);
+            leaveHistory = List<Map<String, dynamic>>.from(
+                data['leaves'] ?? data['data'] ?? []);
           });
         }
       }
     } catch (e) {
       debugPrint("Leave History API Error: $e");
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Error fetching leave history: $e")),
-        );
-      }
     }
   }
 
-// Submit leave application
-  Future<void> _submitLeaveApi(String type, String startDate, String endDate, String reason) async {
+  Future<void> _submitLeaveApi(String type, String startDate, String endDate,
+      String reason) async {
     try {
       final response = await http.post(
         Uri.parse("${API_BASE_URL}manage_leaves.php"),
-        body: {
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
           'emp_id': userId,
           'leave_type': type,
           'start_date': startDate,
           'end_date': endDate,
           'reason': reason,
-        },
+        }),
       );
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        if (data['status'] == 'success') {
+        if (data['status'] == true || data['status'] == 'success') {
           await _fetchLeaveHistory();
           if (!mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
                 backgroundColor: Colors.green,
-                content: Text("Leave Application Submitted!")
-            ),
+                content: Text("Leave Application Submitted!")),
           );
         } else {
           if (!mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
                 backgroundColor: Colors.red,
-                content: Text(data['message'] ?? 'Failed to submit leave')
-            ),
+                content: Text(data['message'] ?? 'Failed to submit leave')),
           );
         }
       }
@@ -849,13 +926,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
             backgroundColor: Colors.red,
-            content: Text("Failed to submit leave: $e")
-        ),
+            content: Text("Failed to submit leave: $e")),
       );
     }
   }
 
-// Show leave application dialog
   void _showLeaveApplicationDialog() {
     _selectedLeaveDateRange = null;
     _leaveReasonController.clear();
@@ -866,7 +941,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
         builder: (context, setDialogState) {
           return Dialog(
             backgroundColor: _AdminPalette.darkModalBg,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
             child: Padding(
               padding: const EdgeInsets.all(20.0),
               child: Column(
@@ -874,16 +950,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text("Leave Application",
-                      style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold)),
                   const SizedBox(height: 12),
                   DropdownButton<String>(
                     value: selectedLeaveType,
                     dropdownColor: _AdminPalette.darkInputBg,
                     isExpanded: true,
                     style: const TextStyle(color: Colors.white),
-                    items: leaveTypes.map((type) => DropdownMenuItem(value: type, child: Text(type))).toList(),
+                    items: leaveTypes
+                        .map((type) =>
+                        DropdownMenuItem(value: type, child: Text(type)))
+                        .toList(),
                     onChanged: (val) {
-                      if (val != null) setDialogState(() => selectedLeaveType = val);
+                      if (val != null)
+                        setDialogState(() => selectedLeaveType = val);
                     },
                   ),
                   const SizedBox(height: 12),
@@ -898,20 +981,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         elevation: 0,
                         minimumSize: const Size(double.infinity, 48),
                       ),
-                      icon: const Icon(Icons.calendar_today, color: Colors.redAccent, size: 16),
+                      icon: const Icon(Icons.calendar_today,
+                          color: Colors.redAccent, size: 16),
                       label: Text(
                         _selectedLeaveDateRange == null
                             ? "Select Date Range"
                             : "${DateFormat('dd-MM-yyyy').format(_selectedLeaveDateRange!.start)} to ${DateFormat('dd-MM-yyyy').format(_selectedLeaveDateRange!.end)}",
-                        style: const TextStyle(color: Colors.white, fontSize: 13),
+                        style: const TextStyle(
+                            color: Colors.white, fontSize: 13),
                       ),
                       onPressed: () async {
                         final picked = await showDateRangePicker(
                           context: context,
                           firstDate: DateTime.now(),
-                          lastDate: DateTime.now().add(const Duration(days: 90)),
+                          lastDate:
+                          DateTime.now().add(const Duration(days: 90)),
                         );
-                        if (picked != null) setDialogState(() => _selectedLeaveDateRange = picked);
+                        if (picked != null)
+                          setDialogState(
+                                  () => _selectedLeaveDateRange = picked);
                       },
                     ),
                   ),
@@ -930,27 +1018,35 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     children: [
                       TextButton(
                         onPressed: () => Navigator.pop(ctx),
-                        child: const Text("Cancel", style: TextStyle(color: Colors.white54)),
+                        child: const Text("Cancel",
+                            style: TextStyle(color: Colors.white54)),
                       ),
                       const Spacer(),
                       ElevatedButton(
-                        style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFFF6B6B)),
+                        style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFFFF6B6B)),
                         onPressed: () {
-                          if (_selectedLeaveDateRange != null && _leaveReasonController.text.isNotEmpty) {
-                            String start = "${_selectedLeaveDateRange!.start.year}-${_selectedLeaveDateRange!.start.month.toString().padLeft(2, '0')}-${_selectedLeaveDateRange!.start.day.toString().padLeft(2, '0')}";
-                            String end = "${_selectedLeaveDateRange!.end.year}-${_selectedLeaveDateRange!.end.month.toString().padLeft(2, '0')}-${_selectedLeaveDateRange!.end.day.toString().padLeft(2, '0')}";
+                          if (_selectedLeaveDateRange != null &&
+                              _leaveReasonController.text.isNotEmpty) {
+                            String start =
+                                "${_selectedLeaveDateRange!.start.year}-${_selectedLeaveDateRange!.start.month.toString().padLeft(2, '0')}-${_selectedLeaveDateRange!.start.day.toString().padLeft(2, '0')}";
+                            String end =
+                                "${_selectedLeaveDateRange!.end.year}-${_selectedLeaveDateRange!.end.month.toString().padLeft(2, '0')}-${_selectedLeaveDateRange!.end.day.toString().padLeft(2, '0')}";
 
-                            _submitLeaveApi(selectedLeaveType, start, end, _leaveReasonController.text);
+                            _submitLeaveApi(selectedLeaveType, start, end,
+                                _leaveReasonController.text);
                             _leaveReasonController.clear();
                             _selectedLeaveDateRange = null;
                             Navigator.pop(ctx);
                           } else {
                             ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text("Please fill all fields")),
+                              const SnackBar(
+                                  content: Text("Please fill all fields")),
                             );
                           }
                         },
-                        child: const Text("Submit Leave", style: TextStyle(color: Colors.white)),
+                        child: const Text("Submit Leave",
+                            style: TextStyle(color: Colors.white)),
                       ),
                     ],
                   )
@@ -963,9 +1059,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-// Show leave history modal with real-time status updates
   void _showLeaveHistoryModal() {
-    // First fetch latest data from API
     _fetchLeaveHistory();
 
     showModalBottomSheet(
@@ -987,18 +1081,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     const Text("Leave History",
-                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _AdminPalette.inkDark)),
+                        style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: _AdminPalette.inkDark)),
                     Row(
                       children: [
                         IconButton(
-                          icon: const Icon(Icons.refresh, color: _AdminPalette.primaryBrown),
-                          onPressed: () {
-                            _fetchLeaveHistory().then((_) {
-                              setModalState(() {});
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(content: Text("Refreshing leave history..."), duration: Duration(seconds: 1)),
-                              );
-                            });
+                          icon: const Icon(Icons.refresh,
+                              color: _AdminPalette.primaryBrown),
+                          onPressed: () async {
+                            await _fetchLeaveHistory();
+                            setModalState(() {});
                           },
                           tooltip: "Refresh",
                         ),
@@ -1017,9 +1111,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(Icons.hourglass_empty, size: 50, color: Colors.grey),
+                        Icon(Icons.hourglass_empty,
+                            size: 50, color: Colors.grey),
                         SizedBox(height: 10),
-                        Text("No leave history found", style: TextStyle(color: Colors.grey)),
+                        Text("No leave history found",
+                            style: TextStyle(color: Colors.grey)),
                       ],
                     ),
                   )
@@ -1028,8 +1124,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     itemBuilder: (ctx, idx) {
                       final item = leaveHistory[idx];
                       Color statusColor = Colors.orange;
-                      if (item['status'] == 'Approved') statusColor = Colors.green;
-                      if (item['status'] == 'Rejected') statusColor = Colors.red;
+                      if (item['status'] == 'Approved')
+                        statusColor = Colors.green;
+                      if (item['status'] == 'Rejected')
+                        statusColor = Colors.red;
 
                       return Card(
                         color: _AdminPalette.cardBg,
@@ -1049,35 +1147,48 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               borderRadius: BorderRadius.circular(8),
                             ),
                             child: Icon(
-                              item['leave_type'] == 'Casual Leave' ? Icons.beach_access :
-                              item['leave_type'] == 'Sick Leave' ? Icons.medication :
-                              item['leave_type'] == 'Maternity Leave' ? Icons.family_restroom :
-                              item['leave_type'] == 'Paternity Leave' ? Icons.people :
-                              Icons.calendar_today,
+                              item['leave_type'] == 'Casual Leave'
+                                  ? Icons.beach_access
+                                  : item['leave_type'] == 'Sick Leave'
+                                  ? Icons.medication
+                                  : item['leave_type'] ==
+                                  'Maternity Leave'
+                                  ? Icons.family_restroom
+                                  : item['leave_type'] ==
+                                  'Paternity Leave'
+                                  ? Icons.people
+                                  : Icons.calendar_today,
                               color: statusColor,
                               size: 20,
                             ),
                           ),
                           title: Text(item['leave_type'] ?? '',
-                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 14)),
                           subtitle: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               const SizedBox(height: 4),
-                              Text("📅 ${item['start_date']} to ${item['end_date']}",
+                              Text(
+                                  "📅 ${item['start_date']} to ${item['end_date']}",
                                   style: const TextStyle(fontSize: 12)),
                               Text("📝 ${item['reason']}",
-                                  style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                                  style: const TextStyle(
+                                      fontSize: 11, color: Colors.grey)),
                               Text("🕐 ${item['created_at'] ?? ''}",
-                                  style: const TextStyle(fontSize: 10, color: Colors.grey)),
+                                  style: const TextStyle(
+                                      fontSize: 10, color: Colors.grey)),
                             ],
                           ),
                           trailing: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 10, vertical: 6),
                             decoration: BoxDecoration(
                               color: statusColor.withOpacity(0.15),
                               borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: statusColor, width: 1.5),
+                              border: Border.all(
+                                  color: statusColor, width: 1.5),
                             ),
                             child: Text(
                               item['status'] ?? 'Pending',
@@ -1104,13 +1215,26 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceAround,
                       children: [
-                        _buildLeaveStatSalesman("Total", leaveHistory.length, Colors.grey),
-                        _buildLeaveStatSalesman("Pending",
-                            leaveHistory.where((l) => l['status'] == 'Pending').length, Colors.orange),
-                        _buildLeaveStatSalesman("Approved",
-                            leaveHistory.where((l) => l['status'] == 'Approved').length, Colors.green),
-                        _buildLeaveStatSalesman("Rejected",
-                            leaveHistory.where((l) => l['status'] == 'Rejected').length, Colors.red),
+                        _buildLeaveStatSalesman("Total", leaveHistory.length,
+                            Colors.grey),
+                        _buildLeaveStatSalesman(
+                            "Pending",
+                            leaveHistory
+                                .where((l) => l['status'] == 'Pending')
+                                .length,
+                            Colors.orange),
+                        _buildLeaveStatSalesman(
+                            "Approved",
+                            leaveHistory
+                                .where((l) => l['status'] == 'Approved')
+                                .length,
+                            Colors.green),
+                        _buildLeaveStatSalesman(
+                            "Rejected",
+                            leaveHistory
+                                .where((l) => l['status'] == 'Rejected')
+                                .length,
+                            Colors.red),
                       ],
                     ),
                   ),
@@ -1129,7 +1253,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
       children: [
         Text(
           count.toString(),
-          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: color),
+          style: TextStyle(
+              fontWeight: FontWeight.bold, fontSize: 14, color: color),
         ),
         Text(
           label,
@@ -1139,8 +1264,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-
-  // WhatsApp Order
+  // ============================================================
+  // WHATSAPP ORDER
+  // ============================================================
   Future<void> _sendWhatsAppOrderAndSave() async {
     if (_taskFormKey.currentState?.validate() != true) return;
 
@@ -1175,7 +1301,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
       await launchUrl(waUrl, mode: LaunchMode.externalApplication);
       if (!launched && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Unable to launch WhatsApp application.")),
+          const SnackBar(
+              content: Text("Unable to launch WhatsApp application.")),
         );
       }
     } catch (e) {
@@ -1187,14 +1314,28 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  // Daily Reports
+  // ============================================================
+  // DAILY REPORTS
+  // ============================================================
   Future<void> _submitDailyReportApi() async {
+    final firmName = _firmNameController.text.trim();
+    if (firmName.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              backgroundColor: Colors.red,
+              content: Text("Please enter firm name")),
+        );
+      }
+      return;
+    }
+
     try {
       final response = await http.post(
         Uri.parse("${API_BASE_URL}manage_daily_reports.php"),
         body: {
           'emp_id': userId,
-          'firm_name': _firmNameController.text,
+          'firm_name': firmName,
           'mobile': _mobileController.text,
           'pin_code': _pinCodeController.text,
           'category': selectedCategory ?? '',
@@ -1209,17 +1350,29 @@ class _DashboardScreenState extends State<DashboardScreen> {
       );
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        if (data['status'] == 'success') {
+        if (data['status'] == true || data['status'] == 'success') {
+          _registeredFirms.add(firmName);
           _fetchDailyReports();
           _firmNameController.clear();
           _mobileController.clear();
           _pinCodeController.clear();
           _qtyController.text = '1';
+          setState(() {
+            _selectedFirm = null;
+            _isAddingNewFirm = false;
+          });
           if (!mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
                 backgroundColor: Colors.green,
                 content: Text("Order successfully logged in Database!")),
+          );
+        } else {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+                backgroundColor: Colors.red,
+                content: Text(data['message'] ?? 'Failed to save order')),
           );
         }
       }
@@ -1242,27 +1395,27 @@ class _DashboardScreenState extends State<DashboardScreen> {
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
 
-        if (data['status'] == 'success' && data['reports'] != null) {
+        if ((data['status'] == true || data['status'] == 'success') &&
+            data['reports'] != null) {
           if (!mounted) return;
           setState(() {
             dailyTaskHistory = List<Map<String, dynamic>>.from(
-              (data['reports'] as List).map((item) => Map<String, dynamic>.from(item)),
+              (data['reports'] as List)
+                  .map((item) => Map<String, dynamic>.from(item)),
             );
+            for (var r in dailyTaskHistory) {
+              final fn = r['firm_name']?.toString().trim();
+              if (fn != null && fn.isNotEmpty) _registeredFirms.add(fn);
+            }
           });
         }
       }
     } catch (e) {
       debugPrint("Daily Report Fetching Error: $e");
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Error fetching daily reports: $e")),
-        );
-      }
     }
   }
 
   void _showDailyTaskHistoryModal() {
-    // First fetch latest data from API
     _fetchDailyReports();
 
     showDialog(
@@ -1271,8 +1424,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
         builder: (context, setDialogState) {
           return Dialog(
             backgroundColor: _AdminPalette.cardBg,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-            insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+            shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            insetPadding:
+            const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
             child: Padding(
               padding: const EdgeInsets.all(20.0),
               child: Column(
@@ -1283,18 +1438,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       const Text("Daily Orders Logged",
-                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _AdminPalette.inkDark)),
+                          style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: _AdminPalette.inkDark)),
                       Row(
                         children: [
                           IconButton(
-                            icon: const Icon(Icons.refresh, color: _AdminPalette.primaryBrown),
-                            onPressed: () {
-                              setState(() {
-                                _fetchDailyReports();
-                              });
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(content: Text("Refreshing orders..."), duration: Duration(seconds: 1)),
-                              );
+                            icon: const Icon(Icons.refresh,
+                                color: _AdminPalette.primaryBrown),
+                            onPressed: () async {
+                              await _fetchDailyReports();
+                              setDialogState(() {});
                             },
                             tooltip: "Refresh",
                           ),
@@ -1313,9 +1468,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       child: Center(
                         child: Column(
                           children: [
-                            Icon(Icons.shopping_bag_outlined, size: 50, color: Colors.grey),
+                            Icon(Icons.shopping_bag_outlined,
+                                size: 50, color: Colors.grey),
                             SizedBox(height: 10),
-                            Text("No daily reports logged.", style: TextStyle(color: Colors.grey)),
+                            Text("No daily reports logged.",
+                                style: TextStyle(color: Colors.grey)),
                           ],
                         ),
                       ),
@@ -1324,7 +1481,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     Flexible(
                       child: ConstrainedBox(
                         constraints: BoxConstraints(
-                          maxHeight: MediaQuery.of(context).size.height * 0.55,
+                          maxHeight:
+                          MediaQuery.of(context).size.height * 0.55,
                         ),
                         child: ListView.separated(
                           shrinkWrap: true,
@@ -1340,27 +1498,39 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                   color: Colors.green.shade50,
                                   borderRadius: BorderRadius.circular(10),
                                 ),
-                                child: const Icon(Icons.receipt_long, color: Colors.green, size: 20),
+                                child: const Icon(Icons.receipt_long,
+                                    color: Colors.green, size: 20),
                               ),
                               title: Text(item['firm_name'] ?? '',
                                   style: const TextStyle(
-                                      fontWeight: FontWeight.bold, fontSize: 14)),
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 14)),
                               subtitle: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
+                                crossAxisAlignment:
+                                CrossAxisAlignment.start,
                                 children: [
                                   const SizedBox(height: 4),
-                                  Text("📦 ${item['category'] ?? ''} • ${item['product_name'] ?? ''}",
-                                      style: const TextStyle(fontSize: 12)),
-                                  Text("Qty: ${item['quantity']} × ₹${item['price']}",
-                                      style: const TextStyle(fontSize: 11)),
+                                  Text(
+                                      "📦 ${item['category'] ?? ''} • ${item['product_name'] ?? ''}",
+                                      style:
+                                      const TextStyle(fontSize: 12)),
+                                  Text(
+                                      "Qty: ${item['quantity']} × ₹${item['price']}",
+                                      style:
+                                      const TextStyle(fontSize: 11)),
                                   Text("📍 ${item['address'] ?? 'N/A'}",
-                                      style: const TextStyle(fontSize: 10, color: Colors.grey)),
+                                      style: const TextStyle(
+                                          fontSize: 10,
+                                          color: Colors.grey)),
                                   Text("🕐 ${item['created_at'] ?? ''}",
-                                      style: const TextStyle(fontSize: 10, color: Colors.grey)),
+                                      style: const TextStyle(
+                                          fontSize: 10,
+                                          color: Colors.grey)),
                                 ],
                               ),
                               trailing: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 10, vertical: 6),
                                 decoration: BoxDecoration(
                                   color: Colors.green.shade50,
                                   borderRadius: BorderRadius.circular(8),
@@ -1388,9 +1558,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
                           const Text("Total Orders:",
-                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                              style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 14)),
                           Text("${dailyTaskHistory.length}",
-                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.green)),
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 14,
+                                  color: Colors.green)),
                         ],
                       ),
                     ),
@@ -1405,13 +1580,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // Geolocator GPS Tracking
+  // ============================================================
+  // GEOLOCATOR GPS TRACKING & AUTO PUNCH OUT
+  // ============================================================
   void _start1MinLocationTimer() {
     _minuteLocationTimer?.cancel();
     _minuteLocationTimer =
         Timer.periodic(const Duration(minutes: 1), (_) async {
           await _fetchAndUpdateCurrentLocation();
+          await _refreshHierarchyLiveLocations();
+          _checkAutoPunchOut();
         });
+  }
+
+  Future<void> _checkAutoPunchOut() async {
+    final now = DateTime.now();
+    if (isCheckedIn && now.hour >= 18) {
+      File dummyFile = capturedImageFile ?? File('');
+      await _submitPunchApi(dummyFile, 'PUNCH_OUT', isAuto: true);
+    }
   }
 
   Future<void> _fetchAndUpdateCurrentLocation() async {
@@ -1516,27 +1703,44 @@ class _DashboardScreenState extends State<DashboardScreen> {
     });
   }
 
-  // Face Detection
+  // ============================================================
+  // FACE DETECTION & SELFIE PUNCH
+  // ============================================================
   Future<Map<String, dynamic>> _analyzeFace(File imageFile) async {
-    final inputImage = InputImage.fromFile(imageFile);
-    final List<Face> faces = await _faceDetector.processImage(inputImage);
+    try {
+      if (_faceDetector == null || !_faceDetectorInitialized) {
+        await _initFaceDetector();
+      }
+      if (_faceDetector == null) {
+        return {'faces': [], 'message': 'Face detector unavailable'};
+      }
 
-    if (faces.isEmpty) {
-      return {'faces': [], 'message': 'No face detected'};
+      final inputImage = InputImage.fromFile(imageFile);
+      final List<Face> faces = await _faceDetector!.processImage(inputImage);
+
+      if (faces.isEmpty) {
+        return {'faces': [], 'message': 'No face detected'};
+      }
+
+      final face = faces.first;
+      Map<String, dynamic> faceFeatures = {
+        'hasSmile': (face.smilingProbability ?? 0.0) > 0.5,
+        'smileProbability': face.smilingProbability ?? 0.0,
+        'leftEyeOpen': face.leftEyeOpenProbability ?? 0.0,
+        'rightEyeOpen': face.rightEyeOpenProbability ?? 0.0,
+      };
+
+      return {
+        'faces': faces,
+        'features': faceFeatures,
+        'message': 'Face verified!'
+      };
+    } catch (e) {
+      debugPrint("Face analysis error: $e");
+      return {'faces': [], 'message': 'Face analysis failed: $e'};
     }
-
-    final face = faces.first;
-    Map<String, dynamic> faceFeatures = {
-      'hasSmile': (face.smilingProbability ?? 0.0) > 0.5,
-      'smileProbability': face.smilingProbability ?? 0.0,
-      'leftEyeOpen': face.leftEyeOpenProbability ?? 0.0,
-      'rightEyeOpen': face.rightEyeOpenProbability ?? 0.0,
-    };
-
-    return {'faces': faces, 'features': faceFeatures, 'message': 'Face verified!'};
   }
 
-  // Selfie Punch
   Future<void> _triggerSelfiePunch() async {
     if (isCheckedIn && !isPunchOutAllowed) {
       if (!mounted) return;
@@ -1587,10 +1791,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
       if (photo == null) return;
 
       File imageFile = File(photo.path);
+      if (!await imageFile.exists()) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              backgroundColor: Colors.red,
+              content: Text("Captured image not found.")),
+        );
+        return;
+      }
 
       if (!mounted) return;
 
-      // Show Loading Dialog
       showDialog(
         context: context,
         barrierDismissible: false,
@@ -1601,17 +1813,50 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
       final result = await _analyzeFace(imageFile);
 
-      // Safely dismiss loading indicator
       if (mounted) {
         Navigator.of(context, rootNavigator: true).pop();
       }
 
-      if (result == null || result['faces'] == null || (result['faces'] as List).isEmpty) {
+      if (result['faces'] == null || (result['faces'] as List).isEmpty) {
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-              backgroundColor: Colors.red,
-              content: Text("Face verification failed. Retry.")),
+        showDialog(
+          context: context,
+          builder: (dialogCtx) => AlertDialog(
+            backgroundColor: _AdminPalette.cardBg,
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20)),
+            title: const Row(
+              children: [
+                Icon(Icons.warning_amber, color: Colors.orange),
+                SizedBox(width: 8),
+                Text("Face Not Detected",
+                    style: TextStyle(
+                        fontSize: 16, fontWeight: FontWeight.bold)),
+              ],
+            ),
+            content: const Text(
+                "No face was detected in the photo. Do you want to proceed with the punch anyway?"),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogCtx).pop(),
+                child:
+                const Text("Retry", style: TextStyle(color: Colors.grey)),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _AdminPalette.primaryBrown,
+                ),
+                onPressed: () async {
+                  Navigator.of(dialogCtx).pop();
+                  final nextPunchType =
+                  isCheckedIn ? 'PUNCH_OUT' : 'PUNCH_IN';
+                  await _submitPunchApi(imageFile, nextPunchType);
+                },
+                child: const Text("Proceed",
+                    style: TextStyle(color: Colors.white)),
+              ),
+            ],
+          ),
         );
         return;
       }
@@ -1623,7 +1868,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
         context: context,
         builder: (dialogCtx) => AlertDialog(
           backgroundColor: _AdminPalette.cardBg,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          shape:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
           title: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -1635,7 +1881,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
               Expanded(
                 child: Text(
                   hasSmile ? "Face Verified with Smile!" : "Face Verified!",
-                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  style: const TextStyle(
+                      fontSize: 16, fontWeight: FontWeight.bold),
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -1655,6 +1902,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       child: Image.file(
                         imageFile,
                         fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => Container(
+                          color: Colors.grey.shade200,
+                          child: const Icon(Icons.person, size: 60),
+                        ),
                       ),
                     ),
                   ),
@@ -1670,13 +1921,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       children: [
                         Text(
                           "📍 ${currentLiveAddress ?? 'N/A'}",
-                          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                          style: const TextStyle(
+                              fontSize: 11, fontWeight: FontWeight.bold),
                           textAlign: TextAlign.center,
                         ),
                         const SizedBox(height: 4),
                         Text(
                           "🕐 ${DateFormat('dd-MM-yyyy HH:mm:ss').format(DateTime.now())}",
-                          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                          style: const TextStyle(
+                              fontSize: 11, fontWeight: FontWeight.bold),
                         ),
                       ],
                     ),
@@ -1688,12 +1941,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
           actions: [
             TextButton(
               onPressed: () => Navigator.of(dialogCtx).pop(),
-              child: const Text("Cancel", style: TextStyle(color: Colors.grey)),
+              child:
+              const Text("Cancel", style: TextStyle(color: Colors.grey)),
             ),
             ElevatedButton(
               style: ElevatedButton.styleFrom(
                 backgroundColor: _AdminPalette.primaryBrown,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
               ),
               onPressed: () async {
                 Navigator.of(dialogCtx).pop();
@@ -1709,8 +1964,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ),
       );
     } catch (e) {
-      if (mounted && Navigator.of(context).canPop()) {
-        Navigator.of(context, rootNavigator: true).pop();
+      if (mounted) {
+        try {
+          Navigator.of(context, rootNavigator: true).pop();
+        } catch (_) {}
       }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1720,7 +1977,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  // Computed Properties
+  // ============================================================
+  // COMPUTED PROPERTIES
+  // ============================================================
   double get calculatedTotal {
     int qty = int.tryParse(_qtyController.text) ?? 0;
     return selectedProductPrice * qty;
@@ -1734,77 +1993,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return total;
   }
 
-  List<HierarchyUserLocation> getVisibleHierarchy() {
-    final visibleRoles = roleVisibilityMap[userRole] ?? [userRole];
-    return hierarchyData
-        .where((item) => visibleRoles.contains(item.roleKey))
-        .toList();
-  }
-
-  Widget _buildTopSummaryCard() {
-    return Container(
-      margin: const EdgeInsets.only(top: 12),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: _AdminPalette.cardHeaderBg,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _AdminPalette.border),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
-        children: [
-          Expanded(
-            child: Column(
-              children: [
-                const Text("Monthly Sales",
-                    style: TextStyle(fontSize: 10, color: _AdminPalette.inkDark),
-                    overflow: TextOverflow.ellipsis),
-                const SizedBox(height: 4),
-                Text("₹${totalMonthlySales.toStringAsFixed(0)}",
-                    style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.green)),
-              ],
-            ),
-          ),
-          Container(height: 25, width: 1, color: _AdminPalette.border),
-          Expanded(
-            child: Column(
-              children: [
-                const Text("Daily Reports",
-                    style: TextStyle(fontSize: 10, color: _AdminPalette.inkDark),
-                    overflow: TextOverflow.ellipsis),
-                const SizedBox(height: 4),
-                Text("${dailyTaskHistory.length}",
-                    style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
-                        color: _AdminPalette.primaryBrown)),
-              ],
-            ),
-          ),
-          Container(height: 25, width: 1, color: _AdminPalette.border),
-          Expanded(
-            child: Column(
-              children: [
-                const Text("Active Team",
-                    style: TextStyle(fontSize: 10, color: _AdminPalette.inkDark),
-                    overflow: TextOverflow.ellipsis),
-                const SizedBox(height: 4),
-                Text("${getVisibleHierarchy().length}",
-                    style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.blueAccent)),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
+  // ============================================================
+  // ROLE-BASED LIVE LOCATION CARD
+  // ============================================================
   Widget _buildRoleBasedLocationCard() {
     return Container(
       padding: const EdgeInsets.all(16),
@@ -1834,13 +2025,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ),
                     Text(
                       "Role: $userRole • ${hierarchyList.length} User(s) Visible",
-                      style: const TextStyle(fontSize: 11, color: Colors.grey),
+                      style:
+                      const TextStyle(fontSize: 11, color: Colors.grey),
                     ),
                   ],
                 ),
               ),
               IconButton(
-                icon: const Icon(Icons.refresh, size: 18, color: _AdminPalette.primaryBrown),
+                icon: const Icon(Icons.refresh,
+                    size: 18, color: _AdminPalette.primaryBrown),
                 onPressed: () {
                   setState(() => isLoadingHierarchy = true);
                   fetchHierarchyAndRoutes();
@@ -1848,9 +2041,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 tooltip: "Refresh Hierarchy",
               ),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                padding:
+                const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
-                  color: isGpsEnabled ? Colors.green.shade50 : Colors.red.shade50,
+                  color: isGpsEnabled
+                      ? Colors.green.shade50
+                      : Colors.red.shade50,
                   borderRadius: BorderRadius.circular(10),
                   border: Border.all(
                     color: isGpsEnabled ? Colors.green : Colors.red,
@@ -1870,11 +2066,48 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ],
           ),
           const SizedBox(height: 12),
+          // Logged-in user's true GPS Address via Geocoding
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(10),
+            margin: const EdgeInsets.only(bottom: 10),
+            decoration: BoxDecoration(
+              color: Colors.blue.shade50,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.blue.shade200),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.person_pin_circle,
+                        color: Colors.blue, size: 16),
+                    const SizedBox(width: 6),
+                    Text(
+                      "Your Live Location ($userName • $userId)",
+                      style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.blue,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  "📍 ${currentLiveAddress ?? 'Fetching...'}",
+                  style: const TextStyle(fontSize: 11),
+                ),
+              ],
+            ),
+          ),
           if (isLoadingHierarchy)
             const Padding(
               padding: EdgeInsets.all(20),
               child: Center(
-                child: CircularProgressIndicator(color: _AdminPalette.goldAccent),
+                child: CircularProgressIndicator(
+                    color: _AdminPalette.goldAccent),
               ),
             )
           else if (hierarchyList.isEmpty)
@@ -1895,14 +2128,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
               itemBuilder: (context, index) {
                 final item = hierarchyList[index];
 
-                final String empId = item['emp_id']?.toString() ?? 'N/A';
+                final String empId = item['emp_id']?.toString() ??
+                    item['employee_id']?.toString() ??
+                    item['id']?.toString() ??
+                    'N/A';
                 final String name = item['name']?.toString() ?? 'User';
                 final String role = item['role']?.toString() ?? 'Salesman';
                 final String assignedRoute = item['assigned_route']?.toString() ?? 'Not Assigned';
-                final String liveLocation = item['live_location']?.toString() ?? 'Location unavailable';
-                final bool isLive = (item['is_live'] == 1 || item['is_live'] == '1');
 
+                // Show API location for other users
+                final String listUserLiveLocation = item['city']?.toString() ?? item['address']?.toString() ?? 'Fetching route...';
+                final bool isLive = (item['is_live'] == 1 || item['is_live'] == '1' || item['is_live'] == true);
                 final isCurrentUser = (empId == userId);
+
+                // Skip own entry since we already showed it at the top via raw geocoding
+                if (isCurrentUser) return const SizedBox.shrink();
 
                 return Card(
                   elevation: 0,
@@ -1921,7 +2161,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         radius: 14,
                         backgroundColor: _AdminPalette.primaryBrown,
                         child: Text(
-                          role.isNotEmpty ? role.substring(0, 1).toUpperCase() : "U",
+                          role.isNotEmpty
+                              ? role.substring(0, 1).toUpperCase()
+                              : "U",
                           style: const TextStyle(
                             color: Colors.white,
                             fontSize: 10,
@@ -1941,7 +2183,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         children: [
                           const SizedBox(height: 2),
                           Text(
-                            "📍 ${isCurrentUser && currentLiveAddress != null ? currentLiveAddress : liveLocation}",
+                            "📍 $listUserLiveLocation",
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(fontSize: 11),
@@ -1975,6 +2217,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
+  // ============================================================
+  // BUILD
+  // ============================================================
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -2024,7 +2269,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           tooltip: "Change Password",
                         ),
                         IconButton(
-                          icon: const Icon(Icons.logout, color: Colors.redAccent),
+                          icon: const Icon(Icons.logout,
+                              color: Colors.redAccent),
                           onPressed: _showLogoutConfirmation,
                           tooltip: "Logout",
                         ),
@@ -2036,7 +2282,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       initialData: DateTime.now(),
                       builder: (context, snapshot) {
                         final now = snapshot.data ?? DateTime.now();
-                        final timeString = DateFormat('hh:mm:ss a').format(now);
+                        final timeString =
+                        DateFormat('hh:mm:ss a').format(now);
                         final dateString =
                         DateFormat('EEEE, dd MMMM yyyy').format(now);
 
@@ -2048,12 +2295,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             borderRadius: BorderRadius.circular(12),
                           ),
                           child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            mainAxisAlignment:
+                            MainAxisAlignment.spaceBetween,
                             children: [
                               Row(
                                 children: [
                                   const Icon(Icons.access_time,
-                                      color: _AdminPalette.goldAccent, size: 16),
+                                      color: _AdminPalette.goldAccent,
+                                      size: 16),
                                   const SizedBox(width: 6),
                                   Text(timeString,
                                       style: const TextStyle(
@@ -2086,7 +2335,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         if (assignedRoute != null)
                           Text("Assigned Route: $assignedRoute",
                               style: const TextStyle(
-                                  color: _AdminPalette.goldLight, fontSize: 11)),
+                                  color: _AdminPalette.goldLight,
+                                  fontSize: 11)),
                       ],
                     ),
                     _buildTopSummaryCard(),
@@ -2124,7 +2374,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                   onPressed: _showLeaveHistoryModal),
                               ElevatedButton(
                                 style: ElevatedButton.styleFrom(
-                                    backgroundColor: _AdminPalette.primaryBrown),
+                                    backgroundColor:
+                                    _AdminPalette.primaryBrown),
                                 onPressed: _showLeaveApplicationDialog,
                                 child: const Text("Apply Leave",
                                     style: TextStyle(
@@ -2149,7 +2400,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            mainAxisAlignment:
+                            MainAxisAlignment.spaceBetween,
                             children: [
                               Expanded(
                                 child: Row(
@@ -2168,9 +2420,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                     ),
                                     IconButton(
                                       padding: EdgeInsets.zero,
-                                      constraints: const BoxConstraints(),
-                                      icon: const Icon(Icons.history, color: _AdminPalette.primaryBrown, size: 20),
-                                      onPressed: _showAttendanceHistoryModal,
+                                      constraints:
+                                      const BoxConstraints(),
+                                      icon: const Icon(Icons.history,
+                                          color: _AdminPalette.primaryBrown,
+                                          size: 20),
+                                      onPressed:
+                                      _showAttendanceHistoryModal,
                                       tooltip: "Attendance History",
                                     ),
                                   ],
@@ -2179,20 +2435,30 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               const SizedBox(width: 8),
                               Flexible(
                                 child: Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 10, vertical: 4),
                                   decoration: BoxDecoration(
-                                    color: isCheckedIn ? Colors.green.shade50 : Colors.red.shade50,
-                                    borderRadius: BorderRadius.circular(12),
+                                    color: isCheckedIn
+                                        ? Colors.green.shade50
+                                        : Colors.red.shade50,
+                                    borderRadius:
+                                    BorderRadius.circular(12),
                                     border: Border.all(
-                                      color: isCheckedIn ? Colors.green : Colors.red,
+                                      color: isCheckedIn
+                                          ? Colors.green
+                                          : Colors.red,
                                     ),
                                   ),
                                   child: Text(
-                                    isCheckedIn ? "✅ Checked In" : "❌ Not Checked In",
+                                    isCheckedIn
+                                        ? "✅ Checked In"
+                                        : "❌ Not Checked In",
                                     overflow: TextOverflow.ellipsis,
                                     maxLines: 1,
                                     style: TextStyle(
-                                      color: isCheckedIn ? Colors.green : Colors.red,
+                                      color: isCheckedIn
+                                          ? Colors.green
+                                          : Colors.red,
                                       fontWeight: FontWeight.bold,
                                       fontSize: 11,
                                     ),
@@ -2205,26 +2471,34 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           if (isCheckedIn) ...[
                             Container(
                               width: double.infinity,
-                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 12, vertical: 6),
                               decoration: BoxDecoration(
-                                color: isPunchOutAllowed ? Colors.blue.shade50 : Colors.orange.shade50,
+                                color: isPunchOutAllowed
+                                    ? Colors.blue.shade50
+                                    : Colors.orange.shade50,
                                 borderRadius: BorderRadius.circular(8),
                                 border: Border.all(
-                                  color: isPunchOutAllowed ? Colors.blue : Colors.orange,
+                                  color: isPunchOutAllowed
+                                      ? Colors.blue
+                                      : Colors.orange,
                                 ),
                               ),
                               child: Text(
                                 getPunchOutStatus(),
                                 textAlign: TextAlign.center,
                                 style: TextStyle(
-                                  color: isPunchOutAllowed ? Colors.blue.shade800 : Colors.orange.shade800,
+                                  color: isPunchOutAllowed
+                                      ? Colors.blue.shade800
+                                      : Colors.orange.shade800,
                                   fontSize: 11,
                                   fontWeight: FontWeight.w500,
                                 ),
                               ),
                             ),
                             const SizedBox(height: 8),
-                            if (lastPunchDate != null && lastPunchTime != null) ...[
+                            if (lastPunchDate != null &&
+                                lastPunchTime != null) ...[
                               Container(
                                 padding: const EdgeInsets.all(8),
                                 decoration: BoxDecoration(
@@ -2236,11 +2510,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                     Expanded(
                                       child: Column(
                                         children: [
-                                          const Text("Date", style: TextStyle(fontSize: 10, color: Colors.grey)),
+                                          const Text("Date",
+                                              style: TextStyle(
+                                                  fontSize: 10,
+                                                  color: Colors.grey)),
                                           Text(
                                             lastPunchDate ?? '',
-                                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
-                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(
+                                                fontWeight: FontWeight.bold,
+                                                fontSize: 12),
+                                            overflow:
+                                            TextOverflow.ellipsis,
                                           ),
                                         ],
                                       ),
@@ -2248,11 +2528,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                     Expanded(
                                       child: Column(
                                         children: [
-                                          const Text("Time", style: TextStyle(fontSize: 10, color: Colors.grey)),
+                                          const Text("Time",
+                                              style: TextStyle(
+                                                  fontSize: 10,
+                                                  color: Colors.grey)),
                                           Text(
                                             lastPunchTime ?? '',
-                                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
-                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(
+                                                fontWeight: FontWeight.bold,
+                                                fontSize: 12),
+                                            overflow:
+                                            TextOverflow.ellipsis,
                                           ),
                                         ],
                                       ),
@@ -2260,11 +2546,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                     Expanded(
                                       child: Column(
                                         children: [
-                                          const Text("Day", style: TextStyle(fontSize: 10, color: Colors.grey)),
+                                          const Text("Day",
+                                              style: TextStyle(
+                                                  fontSize: 10,
+                                                  color: Colors.grey)),
                                           Text(
                                             lastPunchDay ?? '',
-                                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
-                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(
+                                                fontWeight: FontWeight.bold,
+                                                fontSize: 12),
+                                            overflow:
+                                            TextOverflow.ellipsis,
                                           ),
                                         ],
                                       ),
@@ -2276,7 +2568,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             ],
                           ],
                           // Captured Image Display
-                          if (capturedImageFile != null || (capturedPhotoUrl != null && capturedPhotoUrl!.isNotEmpty)) ...[
+                          if (capturedImageFile != null ||
+                              (capturedPhotoUrl != null &&
+                                  capturedPhotoUrl!.isNotEmpty)) ...[
                             Container(
                               padding: const EdgeInsets.all(4),
                               decoration: BoxDecoration(
@@ -2313,29 +2607,41 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                         ? Image.file(
                                       capturedImageFile!,
                                       fit: BoxFit.cover,
-                                      errorBuilder: (context, error, stackTrace) {
-                                        return const Icon(Icons.person, size: 50, color: Colors.grey);
+                                      errorBuilder: (context, error,
+                                          stackTrace) {
+                                        return const Icon(Icons.person,
+                                            size: 50, color: Colors.grey);
                                       },
                                     )
-                                        : (capturedPhotoUrl != null && capturedPhotoUrl!.isNotEmpty
+                                        : (capturedPhotoUrl != null &&
+                                        capturedPhotoUrl!
+                                            .isNotEmpty
                                         ? Image.network(
-                                      capturedPhotoUrl!.startsWith('http')
+                                      capturedPhotoUrl!
+                                          .startsWith('http')
                                           ? capturedPhotoUrl!
                                           : '$API_BASE_URL${capturedPhotoUrl!}',
                                       fit: BoxFit.cover,
-                                      loadingBuilder: (context, child, loadingProgress) {
-                                        if (loadingProgress == null) return child;
+                                      loadingBuilder: (context, child,
+                                          loadingProgress) {
+                                        if (loadingProgress == null)
+                                          return child;
                                         return const Center(
-                                          child: CircularProgressIndicator(
-                                            color: _AdminPalette.goldAccent,
+                                          child:
+                                          CircularProgressIndicator(
+                                            color: _AdminPalette
+                                                .goldAccent,
                                           ),
                                         );
                                       },
-                                      errorBuilder: (context, error, stackTrace) {
-                                        return const Icon(Icons.person, size: 50, color: Colors.grey);
+                                      errorBuilder: (context, error,
+                                          stackTrace) {
+                                        return const Icon(Icons.person,
+                                            size: 50, color: Colors.grey);
                                       },
                                     )
-                                        : const Icon(Icons.person, size: 50, color: Colors.grey)),
+                                        : const Icon(Icons.person,
+                                        size: 50, color: Colors.grey)),
                                   ),
                                 ),
                               ),
@@ -2353,7 +2659,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                     : Colors.grey.shade600)
                                     : const Color(0xFF2E7D32),
                               ),
-                              icon: const Icon(Icons.camera_alt, color: Colors.white, size: 18),
+                              icon: const Icon(Icons.camera_alt,
+                                  color: Colors.white, size: 18),
                               label: Text(
                                 isCheckedIn
                                     ? (isPunchOutAllowed
@@ -2366,7 +2673,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                 ),
                                 overflow: TextOverflow.ellipsis,
                               ),
-                              onPressed: isCheckedIn && !isPunchOutAllowed ? null : _triggerSelfiePunch,
+                              onPressed: isCheckedIn && !isPunchOutAllowed
+                                  ? null
+                                  : _triggerSelfiePunch,
                             ),
                           ),
                           const SizedBox(height: 4),
@@ -2398,7 +2707,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              mainAxisAlignment:
+                              MainAxisAlignment.spaceBetween,
                               children: [
                                 const Text("Daily Report Log",
                                     style: TextStyle(
@@ -2408,21 +2718,74 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                 IconButton(
                                     icon: const Icon(Icons.history,
                                         color: Colors.grey),
-                                    onPressed: _showDailyTaskHistoryModal),
+                                    onPressed:
+                                    _showDailyTaskHistoryModal),
                               ],
                             ),
                             const SizedBox(height: 12),
-                            TextFormField(
-                              controller: _firmNameController,
-                              decoration: InputDecoration(
-                                labelText: 'Firm / Retailer Shop Name',
-                                border: OutlineInputBorder(
-                                    borderRadius: BorderRadius.circular(12)),
-                                isDense: true,
+
+                            // Firm Dropdown or TextField
+                            if (_registeredFirms.isNotEmpty && !_isAddingNewFirm)
+                              DropdownButtonFormField<String>(
+                                value: _selectedFirm,
+                                decoration: InputDecoration(
+                                  labelText: 'Select Registered Firm',
+                                  border: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(12)),
+                                  isDense: true,
+                                ),
+                                items: [
+                                  ..._registeredFirms.map((f) => DropdownMenuItem(value: f, child: Text(f))).toList(),
+                                  const DropdownMenuItem(
+                                      value: 'ADD_NEW',
+                                      child: Text('➕ Add New Firm',
+                                          style: TextStyle(color: Colors.blue, fontWeight: FontWeight.bold))),
+                                ],
+                                onChanged: (val) {
+                                  if (val == 'ADD_NEW') {
+                                    setState(() {
+                                      _isAddingNewFirm = true;
+                                      _selectedFirm = null;
+                                      _firmNameController.clear();
+                                    });
+                                  } else {
+                                    setState(() {
+                                      _selectedFirm = val;
+                                      _firmNameController.text = val!;
+                                    });
+                                  }
+                                },
+                                validator: (v) => (v == null || v.isEmpty) ? 'Select a firm' : null,
                               ),
-                              validator: (v) =>
-                              (v == null || v.isEmpty) ? 'Enter Firm Name' : null,
-                            ),
+
+                            if (_isAddingNewFirm || _registeredFirms.isEmpty)
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: TextFormField(
+                                      controller: _firmNameController,
+                                      decoration: InputDecoration(
+                                        labelText: 'Enter New Firm Name',
+                                        border: OutlineInputBorder(
+                                            borderRadius: BorderRadius.circular(12)),
+                                        isDense: true,
+                                      ),
+                                      validator: (v) =>
+                                      (v == null || v.isEmpty) ? 'Enter Firm Name' : null,
+                                    ),
+                                  ),
+                                  if (_registeredFirms.isNotEmpty)
+                                    IconButton(
+                                      icon: const Icon(Icons.cancel, color: Colors.red),
+                                      onPressed: () {
+                                        setState(() {
+                                          _isAddingNewFirm = false;
+                                          _firmNameController.text = _selectedFirm ?? '';
+                                        });
+                                      },
+                                    )
+                                ],
+                              ),
                             const SizedBox(height: 12),
                             Row(
                               children: [
@@ -2439,7 +2802,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                           BorderRadius.circular(12)),
                                       isDense: true,
                                     ),
-                                    validator: (v) => (v == null || v.length < 10)
+                                    validator: (v) =>
+                                    (v == null || v.length < 10)
                                         ? '10 Digits required'
                                         : null,
                                   ),
@@ -2458,7 +2822,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                           BorderRadius.circular(12)),
                                       isDense: true,
                                     ),
-                                    validator: (v) => (v == null || v.length < 6)
+                                    validator: (v) =>
+                                    (v == null || v.length < 6)
                                         ? 'Invalid PIN'
                                         : null,
                                   ),
@@ -2472,7 +2837,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               decoration: InputDecoration(
                                 labelText: 'Product Category',
                                 border: OutlineInputBorder(
-                                    borderRadius: BorderRadius.circular(12)),
+                                    borderRadius:
+                                    BorderRadius.circular(12)),
                                 isDense: true,
                               ),
                               items: productCatalog.keys
@@ -2483,9 +2849,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                 if (cat != null) {
                                   setState(() {
                                     selectedCategory = cat;
-                                    selectedProductName = productCatalog[cat]!
+                                    selectedProductName = productCatalog[
+                                    cat]!
                                         .first['name'] as String;
-                                    selectedProductPrice = (productCatalog[cat]!
+                                    selectedProductPrice = (productCatalog[
+                                    cat]!
                                         .first['price'] as num)
                                         .toDouble();
                                   });
@@ -2501,7 +2869,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                 decoration: InputDecoration(
                                   labelText: 'Select Item',
                                   border: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(12)),
+                                      borderRadius:
+                                      BorderRadius.circular(12)),
                                   isDense: true,
                                 ),
                                 items: productCatalog[selectedCategory]!
@@ -2514,12 +2883,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                 }).toList(),
                                 onChanged: (prodName) {
                                   if (prodName != null) {
-                                    final prod = productCatalog[selectedCategory]!
-                                        .firstWhere((e) => e['name'] == prodName);
+                                    final prod =
+                                    productCatalog[selectedCategory]!
+                                        .firstWhere((e) =>
+                                    e['name'] == prodName);
                                     setState(() {
                                       selectedProductName = prodName;
                                       selectedProductPrice =
-                                          (prod['price'] as num).toDouble();
+                                          (prod['price'] as num)
+                                              .toDouble();
                                     });
                                   }
                                 },
@@ -2531,27 +2903,32 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               decoration: InputDecoration(
                                 labelText: 'Quantity',
                                 border: OutlineInputBorder(
-                                    borderRadius: BorderRadius.circular(12)),
+                                    borderRadius:
+                                    BorderRadius.circular(12)),
                                 isDense: true,
                               ),
                               onChanged: (_) => setState(() {}),
-                              validator: (v) =>
-                              (v == null || v.isEmpty) ? 'Enter Qty' : null,
+                              validator: (v) => (v == null || v.isEmpty)
+                                  ? 'Enter Qty'
+                                  : null,
                             ),
                             const SizedBox(height: 12),
                             Container(
                               padding: const EdgeInsets.all(12),
                               decoration: BoxDecoration(
                                   color: _AdminPalette.cardHeaderBg,
-                                  borderRadius: BorderRadius.circular(12)),
+                                  borderRadius:
+                                  BorderRadius.circular(12)),
                               child: Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                mainAxisAlignment:
+                                MainAxisAlignment.spaceBetween,
                                 children: [
                                   const Text("Calculated Total:",
                                       style: TextStyle(
                                           fontWeight: FontWeight.bold,
                                           color: _AdminPalette.inkDark)),
-                                  Text("₹${calculatedTotal.toStringAsFixed(2)}",
+                                  Text(
+                                      "₹${calculatedTotal.toStringAsFixed(2)}",
                                       style: const TextStyle(
                                           fontWeight: FontWeight.bold,
                                           fontSize: 16,
@@ -2622,6 +2999,73 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildTopSummaryCard() {
+    return Container(
+      margin: const EdgeInsets.only(top: 12),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: _AdminPalette.cardHeaderBg,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _AdminPalette.border),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceAround,
+        children: [
+          Expanded(
+            child: Column(
+              children: [
+                const Text("Monthly Sales",
+                    style: TextStyle(
+                        fontSize: 10, color: _AdminPalette.inkDark),
+                    overflow: TextOverflow.ellipsis),
+                const SizedBox(height: 4),
+                Text("₹${totalMonthlySales.toStringAsFixed(0)}",
+                    style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.green)),
+              ],
+            ),
+          ),
+          Container(height: 25, width: 1, color: _AdminPalette.border),
+          Expanded(
+            child: Column(
+              children: [
+                const Text("Daily Reports",
+                    style: TextStyle(
+                        fontSize: 10, color: _AdminPalette.inkDark),
+                    overflow: TextOverflow.ellipsis),
+                const SizedBox(height: 4),
+                Text("${dailyTaskHistory.length}",
+                    style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: _AdminPalette.primaryBrown)),
+              ],
+            ),
+          ),
+          Container(height: 25, width: 1, color: _AdminPalette.border),
+          Expanded(
+            child: Column(
+              children: [
+                const Text("Active Team",
+                    style: TextStyle(
+                        fontSize: 10, color: _AdminPalette.inkDark),
+                    overflow: TextOverflow.ellipsis),
+                const SizedBox(height: 4),
+                Text("${hierarchyList.length}",
+                    style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.blueAccent)),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
