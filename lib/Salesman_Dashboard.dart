@@ -130,7 +130,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
   final TextEditingController _leaveReasonController = TextEditingController();
   DateTimeRange? _selectedLeaveDateRange;
   List<Map<String, dynamic>> leaveHistory = [];
-
+  // Firm selection with multi-select checkboxes
+  Set<String> _selectedFirmsMulti = {};
+  bool _showFirmDropdown = false;
+  bool _isLoadingFirms = false;
   // Daily Reports & Company Firms
   List<Map<String, dynamic>> dailyTaskHistory = [];
   List<dynamic> hierarchyList = [];
@@ -543,10 +546,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
             data['data'] != null) {
           final users = data['data'] as List;
           for (var user in users) {
-            if (user['emp_id']?.toString() == userId) {
+            final fetchedEmpId = user['emp_id']?.toString() ?? '';
+            final matchesId = fetchedEmpId == userId ||
+                user['id']?.toString() == userId;
+            if (matchesId) {
               if (mounted) {
                 setState(() {
+                  // ✅ Use the proper emp_id STRING from DB (e.g. BHFSM-01)
+                  if (fetchedEmpId.isNotEmpty) {
+                    userId = fetchedEmpId;
+                  }
                   assignedRoute = user['assigned_route'] ?? 'Not Assigned';
+                  if ((user['name']?.toString() ?? '').isNotEmpty) {
+                    userName = user['name'].toString();
+                  }
+                  if ((user['email']?.toString() ?? '').isNotEmpty) {
+                    userEmail = user['email'].toString();
+                  }
                 });
               }
               break;
@@ -1318,8 +1334,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
   // DAILY REPORTS
   // ============================================================
   Future<void> _submitDailyReportApi() async {
+    // ── Determine firms to submit (checkbox selection OR text field) ──
     final firmName = _firmNameController.text.trim();
-    if (firmName.isEmpty) {
+
+    // If user selected firms via checkboxes → use them
+    // Else fall back to whatever is in the firm name field
+    final List<String> firmsToSubmit = _selectedFirmsMulti.isNotEmpty
+        ? _selectedFirmsMulti.toList()
+        : (firmName.isNotEmpty ? [firmName] : []);
+
+    if (firmsToSubmit.isEmpty) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -1330,58 +1354,98 @@ class _DashboardScreenState extends State<DashboardScreen> {
       return;
     }
 
-    try {
-      final response = await http.post(
-        Uri.parse("${API_BASE_URL}manage_daily_reports.php"),
-        body: {
-          'emp_id': userId,
-          'firm_name': firmName,
-          'mobile': _mobileController.text,
-          'pin_code': _pinCodeController.text,
-          'category': selectedCategory ?? '',
-          'product_name': selectedProductName ?? '',
-          'price': selectedProductPrice.toString(),
-          'quantity': _qtyController.text,
-          'total_amount': calculatedTotal.toString(),
-          'latitude': (currentLatitude ?? 0.0).toString(),
-          'longitude': (currentLongitude ?? 0.0).toString(),
-          'address': currentLiveAddress ?? '',
-        },
-      );
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        if (data['status'] == true || data['status'] == 'success') {
-          _registeredFirms.add(firmName);
-          _fetchDailyReports();
-          _firmNameController.clear();
-          _mobileController.clear();
-          _pinCodeController.clear();
-          _qtyController.text = '1';
-          setState(() {
-            _selectedFirm = null;
-            _isAddingNewFirm = false;
-          });
-          if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-                backgroundColor: Colors.green,
-                content: Text("Order successfully logged in Database!")),
-          );
+    int successCount = 0;
+    String lastMessage = '';
+    String? lastError;
+
+    // ── Submit each firm using the SAME request shape as method 1 ──
+    for (final singleFirm in firmsToSubmit) {
+      try {
+        final response = await http.post(
+          Uri.parse("${API_BASE_URL}manage_daily_reports.php"),
+          body: {
+            'emp_id': userId,
+            'firm_name': singleFirm,
+            'mobile': _mobileController.text,
+            'pin_code': _pinCodeController.text,
+            'category': selectedCategory ?? '',
+            'product_name': selectedProductName ?? '',
+            'price': selectedProductPrice.toString(),
+            'quantity': _qtyController.text,
+            'total_amount': calculatedTotal.toString(),
+            'latitude': (currentLatitude ?? 0.0).toString(),
+            'longitude': (currentLongitude ?? 0.0).toString(),
+            'address': currentLiveAddress ?? '',
+          },
+        );
+
+        // ── SAME parsing logic as method 1 ──
+        if (response.statusCode == 200) {
+          final data = json.decode(response.body);
+
+          if (data['status'] == true || data['status'] == 'success') {
+            successCount++;
+            lastMessage = data['message'] ?? 'Order successfully logged in Database!';
+            // Track locally (also re-synced from DB below)
+            _registeredFirms.add(singleFirm);
+          } else {
+            lastError = data['message'] ?? 'Failed to save order';
+          }
         } else {
-          if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-                backgroundColor: Colors.red,
-                content: Text(data['message'] ?? 'Failed to save order')),
-          );
+          lastError = 'Server error: ${response.statusCode}';
         }
+      } catch (e) {
+        lastError = "Daily Report Order Error: $e";
       }
-    } catch (e) {
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // ── SAME post-success flow as method 1 ──
+    // ══════════════════════════════════════════════════════════════
+    if (successCount > 0) {
+      // 1. Refresh from DB (re-syncs _registeredFirms from daily_reports)
+      _fetchDailyReports();
+
+      // 2. Clear all form controllers — same as method 1
+      _firmNameController.clear();
+      _mobileController.clear();
+      _pinCodeController.clear();
+      _qtyController.text = '1';
+
+      // 3. Reset selection state — same as method 1 + extra multi-select cleanup
+      setState(() {
+        _selectedFirm = null;
+        _isAddingNewFirm = false;
+        _showFirmDropdown = false;
+        _selectedFirmsMulti.clear();
+      });
+
+      if (!mounted) return;
+
+      // 4. Snackbar — same wording pattern, extended for multi-firm
+      final bool isPartial = successCount < firmsToSubmit.length;
+      final String message = isPartial
+          ? "$successCount of ${firmsToSubmit.length} orders saved. ${lastError ?? ''}"
+          : (firmsToSubmit.length > 1
+          ? "$successCount orders successfully logged!"
+          : (lastMessage.isNotEmpty
+          ? lastMessage
+          : "Order successfully logged in Database!"));
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: isPartial ? Colors.orange : Colors.green,
+          content: Text(message),
+        ),
+      );
+    } else {
+      // ── SAME failure flow as method 1 ──
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-            backgroundColor: Colors.red,
-            content: Text("Daily Report Order Error: $e")),
+          backgroundColor: Colors.red,
+          content: Text(lastError ?? 'Failed to save order'),
+        ),
       );
     }
   }
@@ -1403,9 +1467,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
               (data['reports'] as List)
                   .map((item) => Map<String, dynamic>.from(item)),
             );
+
+            // ✅ Repopulate registered firms from daily_reports
+            _registeredFirms.clear();
             for (var r in dailyTaskHistory) {
               final fn = r['firm_name']?.toString().trim();
-              if (fn != null && fn.isNotEmpty) _registeredFirms.add(fn);
+              if (fn != null && fn.isNotEmpty) {
+                _registeredFirms.add(fn);
+              }
             }
           });
         }
@@ -2694,6 +2763,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     const SizedBox(height: 16),
 
                     // Daily Report Log Card
+                    // ============================================================
                     Container(
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
@@ -2706,87 +2776,341 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
+                            // ---- Header ----
                             Row(
-                              mainAxisAlignment:
-                              MainAxisAlignment.spaceBetween,
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
-                                const Text("Daily Report Log",
-                                    style: TextStyle(
-                                        fontSize: 15,
-                                        fontWeight: FontWeight.bold,
-                                        color: _AdminPalette.inkDark)),
-                                IconButton(
-                                    icon: const Icon(Icons.history,
-                                        color: Colors.grey),
-                                    onPressed:
-                                    _showDailyTaskHistoryModal),
+                                const Text(
+                                  "Daily Report Log",
+                                  style: TextStyle(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.bold,
+                                    color: _AdminPalette.inkDark,
+                                  ),
+                                ),
+                                Row(
+                                  children: [
+                                    IconButton(
+                                      icon: const Icon(Icons.refresh,
+                                          color: _AdminPalette.primaryBrown, size: 20),
+                                      onPressed: () async {
+                                        await _fetchDailyReports();
+                                        setState(() {});
+                                      },
+                                      tooltip: "Refresh Firms",
+                                    ),
+                                    IconButton(
+                                      icon: const Icon(Icons.history, color: Colors.grey),
+                                      onPressed: _showDailyTaskHistoryModal,
+                                      tooltip: "Order History",
+                                    ),
+                                  ],
+                                ),
                               ],
                             ),
-                            const SizedBox(height: 12),
+                            const SizedBox(height: 8),
 
-                            // Firm Dropdown or TextField
-                            if (_registeredFirms.isNotEmpty && !_isAddingNewFirm)
-                              DropdownButtonFormField<String>(
-                                value: _selectedFirm,
-                                decoration: InputDecoration(
-                                  labelText: 'Select Registered Firm',
-                                  border: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(12)),
-                                  isDense: true,
-                                ),
-                                items: [
-                                  ..._registeredFirms.map((f) => DropdownMenuItem(value: f, child: Text(f))).toList(),
-                                  const DropdownMenuItem(
-                                      value: 'ADD_NEW',
-                                      child: Text('➕ Add New Firm',
-                                          style: TextStyle(color: Colors.blue, fontWeight: FontWeight.bold))),
-                                ],
-                                onChanged: (val) {
-                                  if (val == 'ADD_NEW') {
-                                    setState(() {
-                                      _isAddingNewFirm = true;
-                                      _selectedFirm = null;
-                                      _firmNameController.clear();
-                                    });
-                                  } else {
-                                    setState(() {
-                                      _selectedFirm = val;
-                                      _firmNameController.text = val!;
-                                    });
-                                  }
-                                },
-                                validator: (v) => (v == null || v.isEmpty) ? 'Select a firm' : null,
-                              ),
-
-                            if (_isAddingNewFirm || _registeredFirms.isEmpty)
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: TextFormField(
-                                      controller: _firmNameController,
-                                      decoration: InputDecoration(
-                                        labelText: 'Enter New Firm Name',
-                                        border: OutlineInputBorder(
-                                            borderRadius: BorderRadius.circular(12)),
-                                        isDense: true,
+                            // ============================================================
+                            // FIRM NAME — Brown dropdown with checkboxes
+                            // ============================================================
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                // ---- Trigger button ----
+                                GestureDetector(
+                                  onTap: () {
+                                    setState(() => _showFirmDropdown = !_showFirmDropdown);
+                                  },
+                                  child: Container(
+                                    width: double.infinity,
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 14, vertical: 14),
+                                    decoration: BoxDecoration(
+                                      color: _AdminPalette.primaryBrown,
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(
+                                        color: _showFirmDropdown
+                                            ? _AdminPalette.goldAccent
+                                            : _AdminPalette.primaryBrown,
+                                        width: _showFirmDropdown ? 2 : 1,
                                       ),
-                                      validator: (v) =>
-                                      (v == null || v.isEmpty) ? 'Enter Firm Name' : null,
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        const Icon(Icons.business,
+                                            color: Colors.white, size: 18),
+                                        const SizedBox(width: 10),
+                                        Expanded(
+                                          child: Text(
+                                            _isAddingNewFirm
+                                                ? "Adding new firm..."
+                                                : (_selectedFirmsMulti.isEmpty
+                                                ? "Select Firm Name"
+                                                : _selectedFirmsMulti.length == 1
+                                                ? _selectedFirmsMulti.first
+                                                : "${_selectedFirmsMulti.length} firms selected"),
+                                            style: const TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                        Icon(
+                                          _showFirmDropdown
+                                              ? Icons.keyboard_arrow_up
+                                              : Icons.keyboard_arrow_down,
+                                          color: Colors.white,
+                                        ),
+                                      ],
                                     ),
                                   ),
-                                  if (_registeredFirms.isNotEmpty)
-                                    IconButton(
-                                      icon: const Icon(Icons.cancel, color: Colors.red),
-                                      onPressed: () {
-                                        setState(() {
-                                          _isAddingNewFirm = false;
-                                          _firmNameController.text = _selectedFirm ?? '';
-                                        });
-                                      },
-                                    )
+                                ),
+
+                                // ---- Expanded checkbox list ----
+                                if (_showFirmDropdown) ...[
+                                  const SizedBox(height: 6),
+                                  Container(
+                                    decoration: BoxDecoration(
+                                      color: _AdminPalette.primaryBrown,
+                                      borderRadius: BorderRadius.circular(12),
+                                      border:
+                                      Border.all(color: _AdminPalette.goldAccent, width: 1),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.black.withOpacity(0.15),
+                                          blurRadius: 8,
+                                          offset: const Offset(0, 4),
+                                        ),
+                                      ],
+                                    ),
+                                    child: Column(
+                                      children: [
+                                        // Header row
+                                        Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 14, vertical: 8),
+                                          child: Row(
+                                            children: [
+                                              const Icon(Icons.list_alt,
+                                                  color: _AdminPalette.goldLight, size: 16),
+                                              const SizedBox(width: 6),
+                                              const Expanded(
+                                                child: Text(
+                                                  "Registered Firms (from daily_reports)",
+                                                  style: TextStyle(
+                                                    color: _AdminPalette.goldLight,
+                                                    fontSize: 11,
+                                                    fontWeight: FontWeight.bold,
+                                                  ),
+                                                ),
+                                              ),
+                                              if (_registeredFirms.isNotEmpty)
+                                                TextButton(
+                                                  onPressed: () {
+                                                    setState(() {
+                                                      if (_selectedFirmsMulti.length ==
+                                                          _registeredFirms.length) {
+                                                        _selectedFirmsMulti.clear();
+                                                      } else {
+                                                        _selectedFirmsMulti = Set<String>.from(
+                                                            _registeredFirms);
+                                                      }
+                                                      _firmNameController.text =
+                                                          _selectedFirmsMulti.join(', ');
+                                                    });
+                                                  },
+                                                  style: TextButton.styleFrom(
+                                                    padding: EdgeInsets.zero,
+                                                    minimumSize: const Size(0, 0),
+                                                    tapTargetSize:
+                                                    MaterialTapTargetSize.shrinkWrap,
+                                                  ),
+                                                  child: Text(
+                                                    _selectedFirmsMulti.length ==
+                                                        _registeredFirms.length
+                                                        ? "Clear All"
+                                                        : "Select All",
+                                                    style: const TextStyle(
+                                                      color: _AdminPalette.goldAccent,
+                                                      fontSize: 11,
+                                                      fontWeight: FontWeight.bold,
+                                                    ),
+                                                  ),
+                                                ),
+                                            ],
+                                          ),
+                                        ),
+                                        const Divider(color: Colors.white24, height: 1),
+
+                                        // Checkbox list
+                                        if (_registeredFirms.isEmpty)
+                                          const Padding(
+                                            padding: EdgeInsets.all(14),
+                                            child: Text(
+                                              "No firms yet. Add your first firm below.",
+                                              style: TextStyle(
+                                                  color: Colors.white70, fontSize: 12),
+                                            ),
+                                          )
+                                        else
+                                          ConstrainedBox(
+                                            constraints:
+                                            const BoxConstraints(maxHeight: 220),
+                                            child: SingleChildScrollView(
+                                              child: Column(
+                                                children:
+                                                _registeredFirms.map((firm) {
+                                                  final isChecked =
+                                                  _selectedFirmsMulti.contains(firm);
+                                                  return InkWell(
+                                                    onTap: () {
+                                                      setState(() {
+                                                        if (isChecked) {
+                                                          _selectedFirmsMulti.remove(firm);
+                                                        } else {
+                                                          _selectedFirmsMulti.add(firm);
+                                                        }
+                                                        _firmNameController.text =
+                                                            _selectedFirmsMulti.join(', ');
+                                                      });
+                                                    },
+                                                    child: Padding(
+                                                      padding: const EdgeInsets.symmetric(
+                                                          horizontal: 10, vertical: 6),
+                                                      child: Row(
+                                                        children: [
+                                                          SizedBox(
+                                                            height: 24,
+                                                            width: 24,
+                                                            child: Checkbox(
+                                                              value: isChecked,
+                                                              activeColor: _AdminPalette
+                                                                  .goldAccent,
+                                                              checkColor: _AdminPalette
+                                                                  .primaryBrown,
+                                                              side: const BorderSide(
+                                                                color: Colors.white,
+                                                                width: 1.5,
+                                                              ),
+                                                              onChanged: (v) {
+                                                                setState(() {
+                                                                  if (v == true) {
+                                                                    _selectedFirmsMulti
+                                                                        .add(firm);
+                                                                  } else {
+                                                                    _selectedFirmsMulti
+                                                                        .remove(firm);
+                                                                  }
+                                                                  _firmNameController
+                                                                      .text =
+                                                                      _selectedFirmsMulti
+                                                                          .join(', ');
+                                                                });
+                                                              },
+                                                            ),
+                                                          ),
+                                                          const SizedBox(width: 8),
+                                                          Expanded(
+                                                            child: Text(
+                                                              firm,
+                                                              style: const TextStyle(
+                                                                color: Colors.white,
+                                                                fontSize: 13,
+                                                              ),
+                                                              overflow: TextOverflow.ellipsis,
+                                                            ),
+                                                          ),
+                                                          const Icon(Icons.store,
+                                                              color: Colors.white54,
+                                                              size: 14),
+                                                        ],
+                                                      ),
+                                                    ),
+                                                  );
+                                                }).toList(),
+                                              ),
+                                            ),
+                                          ),
+
+                                        const Divider(color: Colors.white24, height: 1),
+
+                                        // Add New Firm
+                                        InkWell(
+                                          onTap: () {
+                                            setState(() {
+                                              _isAddingNewFirm = true;
+                                              _showFirmDropdown = false;
+                                              _selectedFirmsMulti.clear();
+                                              _firmNameController.clear();
+                                            });
+                                          },
+                                          child: const Padding(
+                                            padding: EdgeInsets.symmetric(
+                                                horizontal: 14, vertical: 10),
+                                            child: Row(
+                                              children: [
+                                                Icon(Icons.add_circle_outline,
+                                                    color: _AdminPalette.goldAccent,
+                                                    size: 18),
+                                                SizedBox(width: 8),
+                                                Text(
+                                                  "Add New Firm",
+                                                  style: TextStyle(
+                                                    color: _AdminPalette.goldAccent,
+                                                    fontSize: 13,
+                                                    fontWeight: FontWeight.bold,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
                                 ],
-                              ),
+
+                                // ---- Manual input mode (new firm) ----
+                                if (_isAddingNewFirm) ...[
+                                  const SizedBox(height: 8),
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: TextFormField(
+                                          controller: _firmNameController,
+                                          decoration: InputDecoration(
+                                            labelText: 'Enter New Firm Name',
+                                            border: OutlineInputBorder(
+                                                borderRadius: BorderRadius.circular(12)),
+                                            isDense: true,
+                                          ),
+                                          validator: (v) =>
+                                          (v == null || v.trim().isEmpty)
+                                              ? 'Enter Firm Name'
+                                              : null,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 6),
+                                      IconButton(
+                                        icon: const Icon(Icons.cancel, color: Colors.red),
+                                        onPressed: () {
+                                          setState(() {
+                                            _isAddingNewFirm = false;
+                                            _firmNameController.clear();
+                                          });
+                                        },
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ],
+                            ),
+
                             const SizedBox(height: 12),
+
+                            // ---- Mobile + PIN ----
                             Row(
                               children: [
                                 Expanded(
@@ -2798,12 +3122,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                       labelText: 'Mobile No.',
                                       counterText: '',
                                       border: OutlineInputBorder(
-                                          borderRadius:
-                                          BorderRadius.circular(12)),
+                                          borderRadius: BorderRadius.circular(12)),
                                       isDense: true,
                                     ),
-                                    validator: (v) =>
-                                    (v == null || v.length < 10)
+                                    validator: (v) => (v == null || v.length < 10)
                                         ? '10 Digits required'
                                         : null,
                                   ),
@@ -2818,27 +3140,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                       labelText: 'PIN Code',
                                       counterText: '',
                                       border: OutlineInputBorder(
-                                          borderRadius:
-                                          BorderRadius.circular(12)),
+                                          borderRadius: BorderRadius.circular(12)),
                                       isDense: true,
                                     ),
                                     validator: (v) =>
-                                    (v == null || v.length < 6)
-                                        ? 'Invalid PIN'
-                                        : null,
+                                    (v == null || v.length < 6) ? 'Invalid PIN' : null,
                                   ),
                                 ),
                               ],
                             ),
                             const SizedBox(height: 12),
+
+                            // ---- Category ----
                             DropdownButtonFormField<String>(
                               value: selectedCategory,
                               isExpanded: true,
                               decoration: InputDecoration(
                                 labelText: 'Product Category',
                                 border: OutlineInputBorder(
-                                    borderRadius:
-                                    BorderRadius.circular(12)),
+                                    borderRadius: BorderRadius.circular(12)),
                                 isDense: true,
                               ),
                               items: productCatalog.keys
@@ -2849,18 +3169,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                 if (cat != null) {
                                   setState(() {
                                     selectedCategory = cat;
-                                    selectedProductName = productCatalog[
-                                    cat]!
-                                        .first['name'] as String;
-                                    selectedProductPrice = (productCatalog[
-                                    cat]!
-                                        .first['price'] as num)
-                                        .toDouble();
+                                    final list = productCatalog[cat];
+                                    if (list != null && list.isNotEmpty) {
+                                      selectedProductName = list.first['name'] as String;
+                                      selectedProductPrice =
+                                          (list.first['price'] as num).toDouble();
+                                    }
                                   });
                                 }
                               },
                             ),
                             const SizedBox(height: 12),
+
+                            // ---- Product ----
                             if (selectedCategory != null &&
                                 productCatalog[selectedCategory] != null)
                               DropdownButtonFormField<String>(
@@ -2869,12 +3190,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                 decoration: InputDecoration(
                                   labelText: 'Select Item',
                                   border: OutlineInputBorder(
-                                      borderRadius:
-                                      BorderRadius.circular(12)),
+                                      borderRadius: BorderRadius.circular(12)),
                                   isDense: true,
                                 ),
-                                items: productCatalog[selectedCategory]!
-                                    .map((prod) {
+                                items:
+                                productCatalog[selectedCategory]!.map((prod) {
                                   return DropdownMenuItem<String>(
                                     value: prod['name'] as String,
                                     child: Text(
@@ -2883,60 +3203,62 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                 }).toList(),
                                 onChanged: (prodName) {
                                   if (prodName != null) {
-                                    final prod =
-                                    productCatalog[selectedCategory]!
-                                        .firstWhere((e) =>
-                                    e['name'] == prodName);
+                                    final prod = productCatalog[selectedCategory]!
+                                        .firstWhere((e) => e['name'] == prodName);
                                     setState(() {
                                       selectedProductName = prodName;
                                       selectedProductPrice =
-                                          (prod['price'] as num)
-                                              .toDouble();
+                                          (prod['price'] as num).toDouble();
                                     });
                                   }
                                 },
                               ),
                             const SizedBox(height: 12),
+
+                            // ---- Quantity ----
                             TextFormField(
                               controller: _qtyController,
                               keyboardType: TextInputType.number,
                               decoration: InputDecoration(
                                 labelText: 'Quantity',
                                 border: OutlineInputBorder(
-                                    borderRadius:
-                                    BorderRadius.circular(12)),
+                                    borderRadius: BorderRadius.circular(12)),
                                 isDense: true,
                               ),
                               onChanged: (_) => setState(() {}),
-                              validator: (v) => (v == null || v.isEmpty)
-                                  ? 'Enter Qty'
-                                  : null,
+                              validator: (v) =>
+                              (v == null || v.isEmpty) ? 'Enter Qty' : null,
                             ),
                             const SizedBox(height: 12),
+
+                            // ---- Total ----
                             Container(
                               padding: const EdgeInsets.all(12),
                               decoration: BoxDecoration(
                                   color: _AdminPalette.cardHeaderBg,
-                                  borderRadius:
-                                  BorderRadius.circular(12)),
+                                  borderRadius: BorderRadius.circular(12)),
                               child: Row(
-                                mainAxisAlignment:
-                                MainAxisAlignment.spaceBetween,
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                 children: [
-                                  const Text("Calculated Total:",
-                                      style: TextStyle(
-                                          fontWeight: FontWeight.bold,
-                                          color: _AdminPalette.inkDark)),
+                                  const Text(
+                                    "Calculated Total:",
+                                    style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        color: _AdminPalette.inkDark),
+                                  ),
                                   Text(
-                                      "₹${calculatedTotal.toStringAsFixed(2)}",
-                                      style: const TextStyle(
-                                          fontWeight: FontWeight.bold,
-                                          fontSize: 16,
-                                          color: Colors.green)),
+                                    "₹${calculatedTotal.toStringAsFixed(2)}",
+                                    style: const TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 16,
+                                        color: Colors.green),
+                                  ),
                                 ],
                               ),
                             ),
                             const SizedBox(height: 12),
+
+                            // ---- Action Buttons ----
                             Row(
                               children: [
                                 Expanded(
@@ -2945,21 +3267,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                     height: 44,
                                     child: ElevatedButton.icon(
                                       style: ElevatedButton.styleFrom(
-                                        backgroundColor:
-                                        _AdminPalette.primaryBrown,
+                                        backgroundColor: _AdminPalette.primaryBrown,
                                       ),
-                                      icon: const Icon(
-                                          Icons.check_circle_outline,
-                                          color: Colors.white,
-                                          size: 18),
-                                      label: const Text("Save Order",
-                                          style: TextStyle(
-                                              color: Colors.white,
-                                              fontWeight: FontWeight.bold,
-                                              fontSize: 12)),
+                                      icon: const Icon(Icons.check_circle_outline,
+                                          color: Colors.white, size: 18),
+                                      label: const Text(
+                                        "Save Order",
+                                        style: TextStyle(
+                                            color: Colors.white,
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 12),
+                                      ),
                                       onPressed: () {
-                                        if (_taskFormKey.currentState!
-                                            .validate()) {
+                                        if (_taskFormKey.currentState!.validate()) {
                                           _submitDailyReportApi();
                                         }
                                       },
@@ -2973,16 +3293,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                     height: 44,
                                     child: ElevatedButton.icon(
                                       style: ElevatedButton.styleFrom(
-                                        backgroundColor:
-                                        _AdminPalette.whatsappGreen,
+                                        backgroundColor: _AdminPalette.whatsappGreen,
                                       ),
                                       icon: const Icon(Icons.send,
                                           color: Colors.white, size: 16),
-                                      label: const Text("WhatsApp",
-                                          style: TextStyle(
-                                              color: Colors.white,
-                                              fontWeight: FontWeight.bold,
-                                              fontSize: 11)),
+                                      label: const Text(
+                                        "WhatsApp",
+                                        style: TextStyle(
+                                            color: Colors.white,
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 11),
+                                      ),
                                       onPressed: _sendWhatsAppOrderAndSave,
                                     ),
                                   ),

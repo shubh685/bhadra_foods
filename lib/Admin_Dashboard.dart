@@ -189,12 +189,14 @@ class AttendanceRecord {
 }
 
 // Model for Product Catalog
+// Model for Product Catalog
 class ProductItem {
   String id;
   String category;
   String subCategory;
   String name;
   double price;
+  String description;
 
   ProductItem({
     required this.id,
@@ -202,6 +204,7 @@ class ProductItem {
     required this.subCategory,
     required this.name,
     required this.price,
+    this.description = '',
   });
 
   factory ProductItem.fromJson(Map<String, dynamic> json) {
@@ -211,6 +214,7 @@ class ProductItem {
       subCategory: json['sub_category'] ?? '',
       name: json['name'] ?? '',
       price: double.tryParse(json['price']?.toString() ?? '0') ?? 0,
+      description: json['description'] ?? '',
     );
   }
 
@@ -220,6 +224,7 @@ class ProductItem {
       'sub_category': subCategory,
       'name': name,
       'price': price,
+      'description': description,
     };
   }
 }
@@ -330,7 +335,10 @@ class AdminDashboard extends StatefulWidget {
 class _AdminDashboardState extends State<AdminDashboard> {
   late Timer _timer;
   DateTime _currentTime = DateTime.now();
-
+  // Auto password generation
+  bool isGeneratingPassword = false;
+  String generatedPassword = '';
+  bool showGeneratedPassword = false;
   // API Data Lists
   List<SalesmanModel> salesmenList = [];
   List<ProductItem> productCatalog = [];
@@ -999,6 +1007,76 @@ class _AdminDashboardState extends State<AdminDashboard> {
     }
   }
 
+  // ==================== AUTO PASSWORD GENERATION ====================
+
+  // ==================== AUTO PASSWORD GENERATION ====================
+
+  Future<String?> _generateAutoPassword(
+      String role,
+      String empId, {
+        String name = '',
+      }) async {
+    try {
+      setState(() {
+        isGeneratingPassword = true;
+        generatedPassword = '';
+        showGeneratedPassword = false;
+      });
+
+      final response = await http.post(
+        Uri.parse('${API_BASE_URL}auto_password.php'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'role': role,
+          'emp_id': empId,
+          'name': name,
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        final result = json.decode(response.body);
+        if (result['status'] == true && result['data'] != null) {
+          final pwd = result['data']['password']?.toString() ?? '';
+          setState(() {
+            generatedPassword = pwd;
+            showGeneratedPassword = true;
+            isGeneratingPassword = false;
+          });
+          return pwd;
+        } else {
+          setState(() => isGeneratingPassword = false);
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(result['message'] ?? 'Failed to generate password'),
+                backgroundColor: Colors.red,
+              ),
+            );
+          }
+          return null;
+        }
+      } else {
+        setState(() => isGeneratingPassword = false);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Server error: ${response.statusCode}'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+        return null;
+      }
+    } catch (e) {
+      setState(() => isGeneratingPassword = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+        );
+      }
+      return null;
+    }
+  }
   // ==================== UI HELPER METHODS ====================
 
   String _formatDateTime(DateTime dt) {
@@ -2203,18 +2281,33 @@ class _AdminDashboardState extends State<AdminDashboard> {
 
   // ==================== CATALOG MODAL WITH FULL CRUD ====================
 
+  // ==================== CATALOG MODAL WITH FULL CRUD ====================
+
   void _showCatalogModal({ProductItem? editItem}) {
-    final nameController = TextEditingController(text: editItem?.name ?? '');
-    final priceController = TextEditingController(text: editItem != null ? editItem.price.toStringAsFixed(0) : '');
+    final nameController =
+    TextEditingController(text: editItem?.name ?? '');
+    final priceController = TextEditingController(
+        text: editItem != null ? editItem.price.toStringAsFixed(0) : '');
+    final descController =
+    TextEditingController(text: editItem?.description ?? '');
+
     String selectedCat = editItem?.category ?? "Main Item";
     String selectedSubCat = editItem?.subCategory ?? "Khakhra";
+
+    // If editing a celebration box, force sub-category
+    if (selectedCat == "Celebration Box") {
+      selectedSubCat = "Celebration Box";
+    }
 
     showDialog(
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (context, setModalState) {
+          final bool isCelebrationBox = selectedCat == "Celebration Box";
+
           return Dialog(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+            shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
             backgroundColor: _AdminPalette.bgWarm,
             child: Container(
               padding: const EdgeInsets.all(20),
@@ -2231,19 +2324,28 @@ class _AdminDashboardState extends State<AdminDashboard> {
                             children: [
                               Container(
                                 padding: const EdgeInsets.all(8),
-                                decoration: BoxDecoration(color: Colors.blue.shade50, borderRadius: BorderRadius.circular(10)),
-                                child: const Icon(Icons.inventory_2, color: Colors.blue),
+                                decoration: BoxDecoration(
+                                    color: Colors.blue.shade50,
+                                    borderRadius: BorderRadius.circular(10)),
+                                child: const Icon(Icons.inventory_2,
+                                    color: Colors.blue),
                               ),
                               const SizedBox(width: 8),
                               Flexible(
                                 child: Text(
-                                  editItem == null ? "Add Product" : "Edit Product",
-                                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: _AdminPalette.inkDark),
+                                  editItem == null
+                                      ? "Add Product"
+                                      : "Edit Product",
+                                  style: const TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.bold,
+                                      color: _AdminPalette.inkDark),
                                   overflow: TextOverflow.ellipsis,
                                 ),
                               ),
                               IconButton(
-                                icon: const Icon(Icons.history, color: Colors.blue),
+                                icon: const Icon(Icons.history,
+                                    color: Colors.blue),
                                 onPressed: () {
                                   Navigator.pop(ctx);
                                   _showCatalogHistoryModal();
@@ -2252,72 +2354,143 @@ class _AdminDashboardState extends State<AdminDashboard> {
                             ],
                           ),
                         ),
-                        IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(ctx)),
+                        IconButton(
+                            icon: const Icon(Icons.close),
+                            onPressed: () => Navigator.pop(ctx)),
                       ],
                     ),
                     const SizedBox(height: 16),
+
+                    // CATEGORY
                     DropdownButtonFormField<String>(
                       value: selectedCat,
                       decoration: InputDecoration(
                         labelText: "Category",
                         filled: true,
                         fillColor: Colors.white,
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12)),
                       ),
                       items: const [
-                        DropdownMenuItem(value: "Main Item", child: Text("Main Item")),
-                        DropdownMenuItem(value: "Celebration Box", child: Text("Celebration Box")),
+                        DropdownMenuItem(
+                            value: "Main Item", child: Text("Main Item")),
+                        DropdownMenuItem(
+                            value: "Celebration Box",
+                            child: Text("Celebration Box")),
                       ],
                       onChanged: (v) {
                         setModalState(() {
                           selectedCat = v!;
-                          selectedSubCat = selectedCat == "Main Item" ? "Khakhra" : "Gift Packs";
+                          if (selectedCat == "Main Item") {
+                            selectedSubCat = "Khakhra";
+                          } else {
+                            // Celebration Box → no sub-category choice
+                            selectedSubCat = "Celebration Box";
+                          }
                         });
                       },
                     ),
-                    const SizedBox(height: 10),
-                    DropdownButtonFormField<String>(
-                      value: selectedSubCat,
-                      decoration: InputDecoration(
-                        labelText: "Sub Category",
-                        filled: true,
-                        fillColor: Colors.white,
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+
+                    // SUB-CATEGORY — only for Main Item
+                    if (!isCelebrationBox) ...[
+                      const SizedBox(height: 10),
+                      DropdownButtonFormField<String>(
+                        value: selectedSubCat,
+                        decoration: InputDecoration(
+                          labelText: "Sub Category",
+                          filled: true,
+                          fillColor: Colors.white,
+                          border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12)),
+                        ),
+                        items: const [
+                          DropdownMenuItem(
+                              value: "Khakhra", child: Text("Khakhra")),
+                          DropdownMenuItem(
+                              value: "Bhakhari", child: Text("Bhakhari")),
+                          DropdownMenuItem(
+                              value: "Bites", child: Text("Bites")),
+                        ],
+                        onChanged: (v) =>
+                            setModalState(() => selectedSubCat = v!),
                       ),
-                      items: selectedCat == "Main Item"
-                          ? const [
-                        DropdownMenuItem(value: "Khakhra", child: Text("Khakhra")),
-                        DropdownMenuItem(value: "Bhakhari", child: Text("Bhakhari")),
-                        DropdownMenuItem(value: "Bites", child: Text("Bites")),
-                      ]
-                          : const [
-                        DropdownMenuItem(value: "Gift Packs", child: Text("Gift Packs")),
-                        DropdownMenuItem(value: "Festive Edition", child: Text("Festive Edition")),
-                      ],
-                      onChanged: (v) => setModalState(() => selectedSubCat = v!),
-                    ),
+                    ],
+
                     const SizedBox(height: 10),
+
+                    // PRODUCT NAME
                     TextField(
                       controller: nameController,
                       decoration: InputDecoration(
-                        hintText: "Product Name",
+                        labelText: isCelebrationBox
+                            ? "Celebration Box Name *"
+                            : "Product Name *",
+                        hintText: isCelebrationBox
+                            ? "e.g. Diwali Family Combo"
+                            : "Product Name",
                         filled: true,
                         fillColor: Colors.white,
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12)),
                       ),
                     ),
+
+                    // PRICE
                     const SizedBox(height: 10),
                     TextField(
                       controller: priceController,
                       keyboardType: TextInputType.number,
                       decoration: InputDecoration(
+                        labelText: "Price (₹) *",
                         hintText: "Price (₹)",
-                        prefixIcon: const Icon(Icons.currency_rupee, color: _AdminPalette.primaryBrown),
+                        prefixIcon: const Icon(Icons.currency_rupee,
+                            color: _AdminPalette.primaryBrown),
                         filled: true,
                         fillColor: Colors.white,
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12)),
                       ),
                     ),
+
+                    // DESCRIPTION — only for Celebration Box
+                    if (isCelebrationBox) ...[
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: descController,
+                        maxLines: 4,
+                        decoration: InputDecoration(
+                          labelText: "Items Included in this Celebration Box *",
+                          hintText:
+                          "e.g. Assorted Khakhra, Bhakhari, Bites, Dry Fruits & Festive Sweets",
+                          filled: true,
+                          fillColor: Colors.white,
+                          border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12)),
+                          alignLabelWithHint: true,
+                          prefixIcon: const Padding(
+                            padding: EdgeInsets.only(bottom: 60),
+                            child: Icon(Icons.card_giftcard,
+                                color: _AdminPalette.primaryBrown),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          Icon(Icons.info_outline,
+                              size: 12, color: Colors.blue.shade400),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: Text(
+                              "List the items that will be included in this Celebration Box",
+                              style: TextStyle(
+                                  fontSize: 10, color: Colors.blue.shade600),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+
                     const SizedBox(height: 16),
                     SizedBox(
                       width: double.infinity,
@@ -2325,29 +2498,56 @@ class _AdminDashboardState extends State<AdminDashboard> {
                       child: ElevatedButton(
                         style: ElevatedButton.styleFrom(
                           backgroundColor: _AdminPalette.primaryBrown,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12)),
                         ),
                         onPressed: () {
-                          if (nameController.text.isNotEmpty && priceController.text.isNotEmpty) {
-                            final product = ProductItem(
-                              id: editItem?.id ?? '',
-                              category: selectedCat,
-                              subCategory: selectedSubCat,
-                              name: nameController.text.trim(),
-                              price: double.parse(priceController.text.trim()),
+                          if (nameController.text.isEmpty ||
+                              priceController.text.isEmpty) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                  content: Text(
+                                      "Please fill name and price")),
                             );
-
-                            if (editItem != null) {
-                              _updateProduct(product);
-                            } else {
-                              _addProduct(product);
-                            }
-                            Navigator.pop(ctx);
+                            return;
                           }
+                          if (isCelebrationBox &&
+                              descController.text.trim().isEmpty) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                  content: Text(
+                                      "Please list the items included in this Celebration Box")),
+                            );
+                            return;
+                          }
+
+                          final product = ProductItem(
+                            id: editItem?.id ?? '',
+                            category: selectedCat,
+                            subCategory: isCelebrationBox
+                                ? "Celebration Box"
+                                : selectedSubCat,
+                            name: nameController.text.trim(),
+                            price: double.tryParse(
+                                priceController.text.trim()) ??
+                                0,
+                            description: descController.text.trim(),
+                          );
+
+                          if (editItem != null) {
+                            _updateProduct(product);
+                          } else {
+                            _addProduct(product);
+                          }
+                          Navigator.pop(ctx);
                         },
                         child: Text(
-                          editItem == null ? "+ Add to Catalog" : "Update Item",
-                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                          editItem == null
+                              ? "+ Add to Catalog"
+                              : "Update Item",
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold),
                         ),
                       ),
                     ),
@@ -2680,6 +2880,10 @@ class _AdminDashboardState extends State<AdminDashboard> {
     String selectedRole = editItem?.role ?? 'Salesman';
     bool isEditing = editItem != null;
 
+    // Reset any previous auto-password state
+    generatedPassword = '';
+    showGeneratedPassword = false;
+
     String getRolePrefix(String role) {
       switch (role) {
         case 'Salesman':
@@ -2717,6 +2921,17 @@ class _AdminDashboardState extends State<AdminDashboard> {
         builder: (context, setModalState) {
           String previewEmpId = isEditing ? displayEmpId : generateEmpId(selectedRole);
 
+          void applyAutoPassword(String pwd) {
+            passwordCtrl.text = pwd;
+            setModalState(() {
+              showGeneratedPassword = true;
+            });
+          }
+
+          // Whether Auto button should be enabled
+          final bool canGenerateAuto =
+              nameCtrl.text.trim().isNotEmpty && !isGeneratingPassword;
+
           return Container(
             decoration: const BoxDecoration(
               color: _AdminPalette.bgWarm,
@@ -2740,8 +2955,14 @@ class _AdminDashboardState extends State<AdminDashboard> {
                       children: [
                         Expanded(
                           child: Text(
-                            isEditing ? "Edit Salesman Profile" : "Register New Salesman",
-                            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _AdminPalette.inkDark),
+                            isEditing
+                                ? "Edit Salesman Profile"
+                                : "Register New Salesman",
+                            style: const TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: _AdminPalette.inkDark,
+                            ),
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
@@ -2749,13 +2970,16 @@ class _AdminDashboardState extends State<AdminDashboard> {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             IconButton(
-                              icon: const Icon(Icons.history, color: _AdminPalette.primaryBrown),
+                              icon: const Icon(Icons.history,
+                                  color: _AdminPalette.primaryBrown),
                               onPressed: () {
                                 Navigator.pop(ctx);
                                 _showSalesmenHistoryModal();
                               },
                             ),
-                            IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(ctx)),
+                            IconButton(
+                                icon: const Icon(Icons.close),
+                                onPressed: () => Navigator.pop(ctx)),
                           ],
                         ),
                       ],
@@ -2763,21 +2987,26 @@ class _AdminDashboardState extends State<AdminDashboard> {
                     const SizedBox(height: 8),
                     Container(
                       width: double.infinity,
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 12),
                       decoration: BoxDecoration(
                         color: _AdminPalette.primaryBrown.withOpacity(0.08),
                         borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: _AdminPalette.primaryBrown.withOpacity(0.3)),
+                        border: Border.all(
+                            color: _AdminPalette.primaryBrown.withOpacity(0.3)),
                       ),
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
                           Row(
                             children: [
-                              const Icon(Icons.badge, size: 20, color: _AdminPalette.primaryBrown),
+                              const Icon(Icons.badge,
+                                  size: 20, color: _AdminPalette.primaryBrown),
                               const SizedBox(width: 8),
                               Text(
-                                isEditing ? "Employee ID:" : "Formatted Emp ID:",
+                                isEditing
+                                    ? "Employee ID:"
+                                    : "Formatted Emp ID:",
                                 style: const TextStyle(
                                   fontSize: 13,
                                   fontWeight: FontWeight.w600,
@@ -2787,7 +3016,8 @@ class _AdminDashboardState extends State<AdminDashboard> {
                             ],
                           ),
                           Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 6),
                             decoration: BoxDecoration(
                               color: _AdminPalette.primaryBrown,
                               borderRadius: BorderRadius.circular(8),
@@ -2806,14 +3036,22 @@ class _AdminDashboardState extends State<AdminDashboard> {
                       ),
                     ),
                     const SizedBox(height: 12),
+
+                    // Full Name (must be filled before generating auto password)
                     TextFormField(
                       controller: nameCtrl,
-                      validator: (v) => (v == null || v.trim().isEmpty) ? "Full Name is required" : null,
+                      validator: (v) => (v == null || v.trim().isEmpty)
+                          ? "Full Name is required"
+                          : null,
+                      onChanged: (_) {
+                        setModalState(() {});
+                      },
                       decoration: InputDecoration(
                         labelText: "Full Name *",
                         filled: true,
                         fillColor: Colors.white,
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12)),
                       ),
                     ),
                     const SizedBox(height: 10),
@@ -2821,8 +3059,10 @@ class _AdminDashboardState extends State<AdminDashboard> {
                       controller: phoneCtrl,
                       keyboardType: TextInputType.phone,
                       validator: (v) {
-                        if (v == null || v.trim().isEmpty) return "Mobile Number is required";
-                        if (v.trim().length < 10) return "Enter a valid 10-digit mobile number";
+                        if (v == null || v.trim().isEmpty)
+                          return "Mobile Number is required";
+                        if (v.trim().length < 10)
+                          return "Enter a valid 10-digit mobile number";
                         return null;
                       },
                       decoration: InputDecoration(
@@ -2830,7 +3070,8 @@ class _AdminDashboardState extends State<AdminDashboard> {
                         prefixText: "+91 ",
                         filled: true,
                         fillColor: Colors.white,
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12)),
                       ),
                     ),
                     const SizedBox(height: 10),
@@ -2838,15 +3079,18 @@ class _AdminDashboardState extends State<AdminDashboard> {
                       controller: emailCtrl,
                       keyboardType: TextInputType.emailAddress,
                       validator: (v) {
-                        if (v == null || v.trim().isEmpty) return "Email Address is required";
-                        if (!v.contains('@') || !v.contains('.')) return "Enter a valid email address";
+                        if (v == null || v.trim().isEmpty)
+                          return "Email Address is required";
+                        if (!v.contains('@') || !v.contains('.'))
+                          return "Enter a valid email address";
                         return null;
                       },
                       decoration: InputDecoration(
                         labelText: "Email Address *",
                         filled: true,
                         fillColor: Colors.white,
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12)),
                       ),
                     ),
                     const SizedBox(height: 10),
@@ -2859,18 +3103,24 @@ class _AdminDashboardState extends State<AdminDashboard> {
                               labelText: "Role *",
                               filled: true,
                               fillColor: Colors.white,
-                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                              border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12)),
                             ),
                             items: roleOptions
                                 .map((r) => DropdownMenuItem(
                               value: r,
-                              child: Text(r, style: const TextStyle(fontSize: 14)),
+                              child: Text(r,
+                                  style:
+                                  const TextStyle(fontSize: 14)),
                             ))
                                 .toList(),
                             onChanged: (v) {
                               if (v != null) {
                                 setModalState(() {
                                   selectedRole = v;
+                                  generatedPassword = '';
+                                  showGeneratedPassword = false;
+                                  passwordCtrl.clear();
                                 });
                               }
                             },
@@ -2884,7 +3134,8 @@ class _AdminDashboardState extends State<AdminDashboard> {
                               labelText: "City/Zone",
                               filled: true,
                               fillColor: Colors.white,
-                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                              border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12)),
                             ),
                           ),
                         ),
@@ -2892,36 +3143,188 @@ class _AdminDashboardState extends State<AdminDashboard> {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      "Formatted Emp ID stored into manage_salesmna.php table (e.g. BHFSM-01)",
-                      style: TextStyle(fontSize: 10, color: Colors.grey.shade600),
+                      "Formatted Emp ID stored into users table (e.g. BHFSM-01)",
+                      style:
+                      TextStyle(fontSize: 10, color: Colors.grey.shade600),
                     ),
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 12),
+
+                    // ===== PASSWORD SECTION (only when adding new) =====
                     if (!isEditing) ...[
-                      TextFormField(
-                        controller: passwordCtrl,
-                        obscureText: true,
-                        decoration: InputDecoration(
-                          labelText: "Password (default: 123456)",
-                          hintText: "Leave empty for default password",
-                          filled: true,
-                          fillColor: Colors.white,
-                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                          prefixIcon: const Icon(Icons.lock, color: _AdminPalette.primaryBrown),
-                        ),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextFormField(
+                              controller: passwordCtrl,
+                              obscureText: false, // Show generated plain password
+                              readOnly: true, // Only auto-filled
+                              decoration: InputDecoration(
+                                labelText: "Auto Password",
+                                hintText: "Tap ⚡ Auto to generate",
+                                filled: true,
+                                fillColor: Colors.white,
+                                border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(12)),
+                                prefixIcon: const Icon(Icons.lock,
+                                    color: _AdminPalette.primaryBrown),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          // ⚡ Auto Password Generate Button
+                          SizedBox(
+                            height: 56,
+                            child: ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: canGenerateAuto
+                                    ? _AdminPalette.accentBadge
+                                    : Colors.grey.shade300,
+                                padding:
+                                const EdgeInsets.symmetric(horizontal: 14),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                              onPressed: canGenerateAuto
+                                  ? () async {
+                                final pwd = await _generateAutoPassword(
+                                  selectedRole,
+                                  previewEmpId,
+                                  name: nameCtrl.text.trim(),
+                                );
+                                if (pwd != null && pwd.isNotEmpty) {
+                                  applyAutoPassword(pwd);
+                                }
+                              }
+                                  : null,
+                              child: isGeneratingPassword
+                                  ? const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: _AdminPalette.inkDark,
+                                ),
+                              )
+                                  : const Column(
+                                mainAxisAlignment:
+                                MainAxisAlignment.center,
+                                children: [
+                                  Icon(Icons.bolt,
+                                      color: _AdminPalette.inkDark,
+                                      size: 20),
+                                  Text(
+                                    "Auto",
+                                    style: TextStyle(
+                                      color: _AdminPalette.inkDark,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
-                      const SizedBox(height: 10),
+                      const SizedBox(height: 6),
+                      // Hint when name is empty
+                      if (nameCtrl.text.trim().isEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 6, left: 4),
+                          child: Row(
+                            children: [
+                              Icon(Icons.info_outline,
+                                  size: 12, color: Colors.orange.shade700),
+                              const SizedBox(width: 4),
+                              Expanded(
+                                child: Text(
+                                  "Enter Full Name first to enable Auto password",
+                                  style: TextStyle(
+                                      fontSize: 10,
+                                      color: Colors.orange.shade700),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      // Show generated password chip
+                      if (generatedPassword.isNotEmpty &&
+                          passwordCtrl.text == generatedPassword)
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: Colors.green.shade50,
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: Colors.green.shade200),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(Icons.check_circle,
+                                  size: 16, color: Colors.green.shade700),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      "Auto password ready",
+                                      style: TextStyle(
+                                        fontSize: 10,
+                                        color: Colors.green.shade700,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                    Text(
+                                      generatedPassword,
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        color: Colors.green.shade900,
+                                        fontWeight: FontWeight.bold,
+                                        letterSpacing: 0.5,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      const SizedBox(height: 8),
                     ],
-                    const SizedBox(height: 16),
+
+                    const SizedBox(height: 8),
                     SizedBox(
                       width: double.infinity,
                       height: 48,
                       child: ElevatedButton(
                         style: ElevatedButton.styleFrom(
                           backgroundColor: _AdminPalette.primaryBrown,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12)),
                         ),
                         onPressed: () {
                           if (formKey.currentState!.validate()) {
+                            // Auto password is mandatory when adding
+                            if (!isEditing) {
+                              if (passwordCtrl.text.trim().isEmpty) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text(
+                                        "Please tap ⚡ Auto to generate password"),
+                                    backgroundColor: Colors.red,
+                                  ),
+                                );
+                                return;
+                              }
+                            }
+
+                            final finalPassword = passwordCtrl.text.isNotEmpty
+                                ? passwordCtrl.text.trim()
+                                : '123456';
+
                             final salesman = SalesmanModel(
                               id: editItem?.id ?? '',
                               name: nameCtrl.text.trim(),
@@ -2938,14 +3341,15 @@ class _AdminDashboardState extends State<AdminDashboard> {
                               salesman.id = editItem!.id;
                               _updateSalesman(salesman);
                             } else {
-                              _addSalesman(salesman, passwordCtrl.text.isNotEmpty ? passwordCtrl.text : '123456');
+                              _addSalesman(salesman, finalPassword);
                             }
                             Navigator.pop(ctx);
                           }
                         },
                         child: Text(
                           isEditing ? "Update Profile" : "Register Member",
-                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                          style: const TextStyle(
+                              color: Colors.white, fontWeight: FontWeight.bold),
                         ),
                       ),
                     ),
