@@ -5,8 +5,10 @@ import 'package:bhad_foods/Admin_Dashboard.dart';
 import 'package:bhad_foods/Salesman_Dashboard.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
+import 'package:permission_handler/permission_handler.dart';
 import 'Forgot_Pwd.dart';
 import 'Register.dart';
 
@@ -171,64 +173,52 @@ class _LoginState extends State<Login> with SingleTickerProviderStateMixin {
       final data = jsonDecode(response.body);
 
       // Successful API response
+      // Successful API response
       if (response.statusCode == 200 && data['status'] == 'success') {
         final userData = data['user'];
 
         final String empId = userData['emp_id'] ?? '';
         final String name = userData['name'] ?? '';
         final String email = userData['email'] ?? '';
-        final String role = userData['role'] ?? selectedRole!;
+        final String mobile = userData['mobile'] ?? '';
+        final String actualRole = userData['role'] ?? '';
 
         _showSnackBar('Login Successful!', Colors.green);
+        await _requestAllPermissions();
 
         if (!mounted) return;
 
         // ==============================
         // ADMIN NAVIGATION
         // ==============================
-        if (selectedRole == 'Admin') {
+        if (actualRole == 'Admin') {
           Navigator.pushReplacement(
             context,
             MaterialPageRoute(
               builder: (context) => const AdminDashboard(),
             ),
           );
+          await _requestAllPermissions();
         }
 
         // ==============================
-        // SALESMAN / SALES STAFF
+        // SALES STAFF NAVIGATION
         // ==============================
-        else if (selectedRole == 'Salesman' ||
-            selectedRole == 'Sales Officer' ||
-            selectedRole == 'Area Sales Manager' ||
-            selectedRole == 'Regional Sales Manager' ||
-            selectedRole == 'Zone Wise Sales Manager' ||
-            selectedRole == 'Sales Head') {
+        else if (actualRole == 'Salesman' ||
+            actualRole == 'Sales Officer' ||
+            actualRole == 'Area Sales Manager' ||
+            actualRole == 'Regional Sales Manager' ||
+            actualRole == 'Zone Wise Sales Manager' ||
+            actualRole == 'Sales Head' ) {
           Navigator.pushReplacement(
             context,
             MaterialPageRoute(
               builder: (context) => DashboardScreen(
-                loggedInRole: role,
+                loggedInRole: actualRole,
                 loggedInUserId: empId,
                 loggedInUserName: name,
                 email: email,
-              ),
-            ),
-          );
-        }
-
-        // ==============================
-        // SUPER STOCKIEST
-        // ==============================
-        else if (selectedRole == 'Super Stockiest') {
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(
-              builder: (context) => DashboardScreen(
-                loggedInRole: role,
-                loggedInUserId: empId,
-                loggedInUserName: name,
-                email: email,
+                mobile: mobile, // Pass mobile number if your Dashboard accepts it
               ),
             ),
           );
@@ -318,6 +308,173 @@ class _LoginState extends State<Login> with SingleTickerProviderStateMixin {
         behavior: SnackBarBehavior.floating,
       ),
     );
+  }
+
+  // ============================================================
+  // PERMISSION HANDLER — Location + Camera (called after login)
+  // ============================================================
+  Future<void> _requestAllPermissions() async {
+    // Skip on Web (browser handles its own permission prompts)
+    if (kIsWeb) return;
+
+    // ── STEP 1: Location Services ON? ──
+    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      if (mounted) await _showLocationServiceDialog();
+      serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    }
+
+    // ── STEP 2: Location Permission ──
+    LocationPermission locPerm = await Geolocator.checkPermission();
+    if (locPerm == LocationPermission.denied) {
+      locPerm = await Geolocator.requestPermission();
+    }
+
+    // ── STEP 3: Camera Permission ──
+    PermissionStatus camStatus = await Permission.camera.status;
+    if (camStatus.isDenied) {
+      camStatus = await Permission.camera.request();
+    }
+
+    // ── STEP 4: Re-check + show denied dialog if blocked ──
+    final bool locOk = locPerm == LocationPermission.always ||
+        locPerm == LocationPermission.whileInUse;
+    final bool camOk = camStatus.isGranted;
+
+    if ((!locOk || !camOk) && mounted) {
+      final bool retry = await _showPermissionDeniedDialog(
+        locationDenied: !locOk,
+        cameraDenied: !camOk,
+      );
+      if (retry) {
+        await _requestAllPermissions();
+      }
+    }
+  }
+
+  Future<void> _showLocationServiceDialog() async {
+    await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        backgroundColor: _Palette.card,
+        title: Row(
+          children: [
+            const Icon(Icons.location_off, color: Colors.orange),
+            const SizedBox(width: 8),
+            Text(
+              "Location Services Off",
+              style: GoogleFonts.cormorantGaramond(
+                fontWeight: FontWeight.bold,
+                fontSize: 18,
+                color: _Palette.ink,
+              ),
+            ),
+          ],
+        ),
+        content: Text(
+          "Please enable GPS / Location Services on your device so we can record your live location for attendance and route tracking.",
+          style: GoogleFonts.plusJakartaSans(fontSize: 13, color: _Palette.ink),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(
+              "Later",
+              style: GoogleFonts.plusJakartaSans(color: Colors.grey),
+            ),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _Palette.espresso,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
+            ),
+            onPressed: () async {
+              Navigator.pop(ctx);
+              await Geolocator.openLocationSettings();
+            },
+            child: Text(
+              "Open Settings",
+              style: GoogleFonts.plusJakartaSans(color: _Palette.goldLight),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<bool> _showPermissionDeniedDialog({
+    required bool locationDenied,
+    required bool cameraDenied,
+  }) async {
+    final String message = [
+      if (locationDenied)
+        "• Location permission is needed for live tracking and attendance punch.",
+      if (cameraDenied)
+        "• Camera permission is needed for selfie-verified punch in/out.",
+    ].join("\n");
+
+    final bool? retry = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        backgroundColor: _Palette.card,
+        title: Row(
+          children: [
+            const Icon(Icons.warning_amber, color: Colors.orange),
+            const SizedBox(width: 8),
+            Text(
+              "Permissions Needed",
+              style: GoogleFonts.cormorantGaramond(
+                fontWeight: FontWeight.bold,
+                fontSize: 18,
+                color: _Palette.ink,
+              ),
+            ),
+          ],
+        ),
+        content: Text(
+          "$message\n\nPlease allow these permissions to use all dashboard features.",
+          style: GoogleFonts.plusJakartaSans(fontSize: 13, color: _Palette.ink),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(
+              "Not Now",
+              style: GoogleFonts.plusJakartaSans(color: Colors.grey),
+            ),
+          ),
+          TextButton(
+            onPressed: () async {
+              Navigator.pop(ctx, false);
+              await openAppSettings();
+            },
+            child: Text(
+              "App Settings",
+              style: GoogleFonts.plusJakartaSans(
+                color: _Palette.espresso,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _Palette.espresso,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(
+              "Retry",
+              style: GoogleFonts.plusJakartaSans(color: _Palette.goldLight),
+            ),
+          ),
+        ],
+      ),
+    );
+    return retry ?? false;
   }
 
   @override

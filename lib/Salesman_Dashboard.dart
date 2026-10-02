@@ -63,13 +63,15 @@ class DashboardScreen extends StatefulWidget {
   final String loggedInUserId;
   final String loggedInUserName;
   final String email;
+  final String mobile;
 
   const DashboardScreen({
     super.key,
-    this.loggedInRole = 'Salesman',
-    this.loggedInUserId = 'BHFSM-01',
-    this.loggedInUserName = 'Shubham Shah',
-    this.email = "shubham@bhadrafoods.com",
+    this.loggedInRole = 'S',
+    this.loggedInUserId = '1',
+    this.loggedInUserName = '1',
+    this.email = "abc@gmail.com",
+    this.mobile = "91256898756",
   });
 
   @override
@@ -140,9 +142,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool isLoadingHierarchy = true;
 
   // Registered firms cache for dropdown
+  // Registered firms cache for dropdown
   Set<String> _registeredFirms = {};
   bool _isAddingNewFirm = false;
   String? _selectedFirm;
+  bool _firmVerified = false;         // true when firm+mobile+pin match exists in DB
+  bool _isVerifyingFirm = false;      // spinner while checking
+  String? _verifiedFirmName;          // exact firm name that was verified
+  String? _firmVerifyError;           // error text to show under button
+  String? _lastVerifiedSignature;
+  // ✅ ADD THESE — Firm lock tracking (for mobile + pin verification)
+  final Map<String, bool> _firmLocked = {};
+  bool _isCurrentFirmLocked = false;
 
   // Role visibility map (Determines Hierarchy Logic)
   Map<String, List<String>> get roleVisibilityMap => {
@@ -191,6 +202,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   @override
+  @override
   void initState() {
     super.initState();
     userRole = widget.loggedInRole;
@@ -211,6 +223,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _fetchAssignedRoute();
     _fetchLeaveHistory();
     fetchHierarchyAndRoutes();
+
+    // ✅ Reset firm verification when any of the 3 key fields change
+    _firmNameController.addListener(_resetFirmVerification);
+    _mobileController.addListener(_resetFirmVerification);
+    _pinCodeController.addListener(_resetFirmVerification);
+  }
+
+  void _resetFirmVerification() {
+    if (_firmVerified) {
+      setState(() {
+        _firmVerified = false;
+        _verifiedFirmName = null;
+        _lastVerifiedSignature = null;
+      });
+    } else if (_firmVerifyError != null) {
+      setState(() => _firmVerifyError = null);
+    }
   }
 
   Future<void> _initFaceDetector() async {
@@ -295,13 +324,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   @override
+  @override
   void dispose() {
+    _firmNameController.removeListener(_resetFirmVerification);
+    _mobileController.removeListener(_resetFirmVerification);
+    _pinCodeController.removeListener(_resetFirmVerification);
+
     _positionStreamSub?.cancel();
     _minuteLocationTimer?.cancel();
     _punchCheckTimer?.cancel();
-    try {
-      _faceDetector?.close();
-    } catch (_) {}
+    try { _faceDetector?.close(); } catch (_) {}
+
     _firmNameController.dispose();
     _mobileController.dispose();
     _pinCodeController.dispose();
@@ -535,38 +568,130 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  // ============================================================
+// PUSH LIVE LOCATION TO SERVER (every 1 minute)
+// ============================================================
+  // ============================================================
+  // PUSH LIVE LOCATION TO SERVER (every 1 minute)
+  // ────────────────────────────────────────────────────────────
+  // ✅ Pushes the GEOCODED full address (not just city) to the server
+  //    so that OTHER users viewing this person in their hierarchy card
+  //    see the proper live address instead of a bare city name.
+  // ============================================================
+  Future<void> _pushLiveLocationToServer() async {
+    try {
+      if (currentLatitude == null || currentLongitude == null) return;
+      if (currentLiveAddress == null || currentLiveAddress!.trim().isEmpty) {
+        return;
+      }
+
+      // Skip pushing placeholder/error strings
+      final addr = currentLiveAddress!.trim();
+      if (addr.startsWith('Fetching') ||
+          addr.startsWith('GPS') ||
+          addr.startsWith('Location permission') ||
+          addr.startsWith('Unable to fetch')) {
+        return;
+      }
+
+      final response = await http.post(
+        Uri.parse("${API_BASE_URL}manage_salesman.php"),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'emp_id': userId,
+          'latitude': currentLatitude,
+          'longitude': currentLongitude,
+          // ✅ Send geocoded address in BOTH fields so whatever the PHP
+          //    side reads, it gets the full address.
+          'city': addr,
+          'address': addr,
+          'live_address': addr,
+          'is_live': 1,
+          'update_location_only': true,
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        debugPrint("✅ Live location pushed: $userId → $addr");
+      } else {
+        debugPrint("⚠ Live location push HTTP ${response.statusCode}");
+      }
+    } catch (e) {
+      debugPrint("❌ Live location push error: $e");
+    }
+  }
+
   Future<void> _fetchAssignedRoute() async {
     try {
+      // ✅ Fetch ALL users (no emp_id filter) so we can match by email/name/id
       final response = await http.get(
-        Uri.parse("${API_BASE_URL}manage_salesman.php?emp_id=$userId"),
+        Uri.parse("${API_BASE_URL}manage_salesman.php"),
       );
+
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         if ((data['status'] == true || data['status'] == 'success') &&
             data['data'] != null) {
           final users = data['data'] as List;
+
+          // Try to find the logged-in user by multiple strategies:
+          // 1. Exact emp_id match (widget userId)
+          // 2. Email match (most reliable — unique)
+          // 3. Name match (fallback)
+          Map<String, dynamic>? matchedUser;
+
           for (var user in users) {
             final fetchedEmpId = user['emp_id']?.toString() ?? '';
-            final matchesId = fetchedEmpId == userId ||
-                user['id']?.toString() == userId;
-            if (matchesId) {
-              if (mounted) {
-                setState(() {
-                  // ✅ Use the proper emp_id STRING from DB (e.g. BHFSM-01)
-                  if (fetchedEmpId.isNotEmpty) {
-                    userId = fetchedEmpId;
-                  }
-                  assignedRoute = user['assigned_route'] ?? 'Not Assigned';
-                  if ((user['name']?.toString() ?? '').isNotEmpty) {
-                    userName = user['name'].toString();
-                  }
-                  if ((user['email']?.toString() ?? '').isNotEmpty) {
-                    userEmail = user['email'].toString();
-                  }
-                });
-              }
+            final fetchedEmail = user['email']?.toString() ?? '';
+            final fetchedName = user['name']?.toString() ?? '';
+
+            // Strategy 1: emp_id exact match
+            if (fetchedEmpId == userId) {
+              matchedUser = user;
               break;
             }
+            // Strategy 2: email match
+            if (fetchedEmail.isNotEmpty &&
+                fetchedEmail.toLowerCase() == userEmail.toLowerCase()) {
+              matchedUser = user;
+              break;
+            }
+            // Strategy 3: name match (last resort)
+            if (fetchedName.isNotEmpty &&
+                fetchedName.toLowerCase() == userName.toLowerCase()) {
+              matchedUser = user;
+              // Don't break — keep looking for a better match
+            }
+          }
+
+          // ✅ Capture into a non-nullable local variable
+          final Map<String, dynamic>? matched = matchedUser;
+
+          if (matched != null && mounted) {
+            // ✅ Use the captured 'matched' variable — now safely non-null
+            final actualEmpId = matched['emp_id']?.toString() ?? '';
+            final actualRoute =
+                matched['assigned_route']?.toString() ?? 'Not Assigned';
+            final actualName = matched['name']?.toString() ?? '';
+            final actualEmail = matched['email']?.toString() ?? '';
+
+            setState(() {
+              if (actualEmpId.isNotEmpty) {
+                userId = actualEmpId;
+              }
+              assignedRoute = actualRoute;
+              if (actualName.isNotEmpty) {
+                userName = actualName;
+              }
+              if (actualEmail.isNotEmpty) {
+                userEmail = actualEmail;
+              }
+            });
+
+            // ✅ Re-fetch attendance, leave, reports with the CORRECT emp_id
+            _fetchAttendanceStatus();
+            _fetchLeaveHistory();
+            _fetchDailyReports();
           }
         }
       }
@@ -1284,6 +1409,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
   // WHATSAPP ORDER
   // ============================================================
   Future<void> _sendWhatsAppOrderAndSave() async {
+    if (!_firmVerified) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          backgroundColor: Colors.orange,
+          content: Text("Please verify the firm first."),
+        ),
+      );
+      return;
+    }
+
     if (_taskFormKey.currentState?.validate() != true) return;
 
     final firmName = _firmNameController.text;
@@ -1306,7 +1441,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 ━━━━━━━━━━━━━━━━━━
 *Sales Representative:* $userName ($userId)
 *Timestamp:* ${DateFormat('dd-MM-yyyy HH:mm:ss').format(DateTime.now())}
-    """;
+  """;
 
     final encodedMessage = Uri.encodeFull(message);
     final waUrl = Uri.parse("https://wa.me/919512312400?text=$encodedMessage");
@@ -1333,12 +1468,48 @@ class _DashboardScreenState extends State<DashboardScreen> {
   // ============================================================
   // DAILY REPORTS
   // ============================================================
+  Future<bool> _checkFirmExists(String firmName) async {
+    final mobile = _mobileController.text.trim();
+    final pinCode = _pinCodeController.text.trim();
+
+    if (firmName.isEmpty || mobile.isEmpty || pinCode.isEmpty) return false;
+
+    try {
+      final uri = Uri.parse(
+        "${API_BASE_URL}manage_daily_reports.php"
+            "?action=verify"
+            "&emp_id=$userId"
+            "&firm_name=${Uri.encodeComponent(firmName)}"
+            "&mobile=${Uri.encodeComponent(mobile)}"
+            "&pin_code=${Uri.encodeComponent(pinCode)}",
+      );
+
+      final response = await http.get(uri);
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        return data['exists'] == true;
+      }
+    } catch (e) {
+      debugPrint("Verify Firm Error: $e");
+    }
+    return false;
+  }
+
   Future<void> _submitDailyReportApi() async {
-    // ── Determine firms to submit (checkbox selection OR text field) ──
+    if (!_firmVerified) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            backgroundColor: Colors.orange,
+            content: Text("Verify the firm before saving."),
+          ),
+        );
+      }
+      return;
+    }
+
     final firmName = _firmNameController.text.trim();
 
-    // If user selected firms via checkboxes → use them
-    // Else fall back to whatever is in the firm name field
     final List<String> firmsToSubmit = _selectedFirmsMulti.isNotEmpty
         ? _selectedFirmsMulti.toList()
         : (firmName.isNotEmpty ? [firmName] : []);
@@ -1347,20 +1518,29 @@ class _DashboardScreenState extends State<DashboardScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-              backgroundColor: Colors.red,
-              content: Text("Please enter firm name")),
+            backgroundColor: Colors.red,
+            content: Text("Please enter firm name"),
+          ),
         );
       }
       return;
     }
 
     int successCount = 0;
+    int skippedCount = 0;
     String lastMessage = '';
     String? lastError;
 
-    // ── Submit each firm using the SAME request shape as method 1 ──
     for (final singleFirm in firmsToSubmit) {
       try {
+        final alreadyExists = await _checkFirmExists(singleFirm);
+        if (alreadyExists) {
+          skippedCount++;
+          _registeredFirms.add(singleFirm);
+          _firmLocked[singleFirm] = true;
+          continue;
+        }
+
         final response = await http.post(
           Uri.parse("${API_BASE_URL}manage_daily_reports.php"),
           body: {
@@ -1379,15 +1559,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
           },
         );
 
-        // ── SAME parsing logic as method 1 ──
         if (response.statusCode == 200) {
           final data = json.decode(response.body);
-
           if (data['status'] == true || data['status'] == 'success') {
             successCount++;
-            lastMessage = data['message'] ?? 'Order successfully logged in Database!';
-            // Track locally (also re-synced from DB below)
+            lastMessage =
+                data['message'] ?? 'Order successfully logged in Database!';
             _registeredFirms.add(singleFirm);
+            _firmLocked[singleFirm] = true;
           } else {
             lastError = data['message'] ?? 'Failed to save order';
           }
@@ -1399,32 +1578,31 @@ class _DashboardScreenState extends State<DashboardScreen> {
       }
     }
 
-    // ══════════════════════════════════════════════════════════════
-    // ── SAME post-success flow as method 1 ──
-    // ══════════════════════════════════════════════════════════════
-    if (successCount > 0) {
-      // 1. Refresh from DB (re-syncs _registeredFirms from daily_reports)
+    if (successCount > 0 || skippedCount > 0) {
       _fetchDailyReports();
 
-      // 2. Clear all form controllers — same as method 1
       _firmNameController.clear();
       _mobileController.clear();
       _pinCodeController.clear();
       _qtyController.text = '1';
 
-      // 3. Reset selection state — same as method 1 + extra multi-select cleanup
       setState(() {
         _selectedFirm = null;
         _isAddingNewFirm = false;
         _showFirmDropdown = false;
         _selectedFirmsMulti.clear();
+        _isCurrentFirmLocked = false;
+        _firmVerified = false;
+        _verifiedFirmName = null;
+        _lastVerifiedSignature = null;
       });
 
       if (!mounted) return;
 
-      // 4. Snackbar — same wording pattern, extended for multi-firm
       final bool isPartial = successCount < firmsToSubmit.length;
-      final String message = isPartial
+      final String message = skippedCount > 0 && successCount == 0
+          ? "$skippedCount firm(s) already registered — skipped."
+          : isPartial
           ? "$successCount of ${firmsToSubmit.length} orders saved. ${lastError ?? ''}"
           : (firmsToSubmit.length > 1
           ? "$successCount orders successfully logged!"
@@ -1439,7 +1617,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ),
       );
     } else {
-      // ── SAME failure flow as method 1 ──
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -1447,6 +1624,95 @@ class _DashboardScreenState extends State<DashboardScreen> {
           content: Text(lastError ?? 'Failed to save order'),
         ),
       );
+    }
+  }
+
+  // ============================================================
+// VERIFY FIRM — checks firm_name + mobile + pin_code against
+// the REGISTERED users in manage_salesman.php (users table).
+// Only if a matching user exists does the product section unlock.
+// ============================================================
+  // ============================================================
+// VERIFY FIRM — checks name + mobile + pin_code in users table
+// (manage_salesman.php)
+// ============================================================
+  Future<void> _verifyFirmFromDatabase() async {
+    final firmName = _firmNameController.text.trim();
+    final mobile = _mobileController.text.trim();
+    final pinCode = _pinCodeController.text.trim();
+
+    setState(() {
+      _firmVerifyError = null;
+      _firmVerified = false;
+      _verifiedFirmName = null;
+    });
+
+    if (firmName.isEmpty) {
+      setState(() => _firmVerifyError = "Please select or enter a firm name.");
+      return;
+    }
+    if (mobile.length < 10) {
+      setState(() => _firmVerifyError = "Please enter a valid 10-digit mobile.");
+      return;
+    }
+    if (pinCode.length < 6) {
+      setState(() => _firmVerifyError = "Please enter a valid 6-digit PIN code.");
+      return;
+    }
+
+    final signature = "$firmName|$mobile|$pinCode";
+    if (_lastVerifiedSignature == signature && _firmVerified) return;
+
+    setState(() => _isVerifyingFirm = true);
+
+    try {
+      // ✅ Now hits manage_salesman.php
+      final uri = Uri.parse(
+        "${API_BASE_URL}manage_salesman.php"
+            "?action=verify_firm"
+            "&firm_name=${Uri.encodeComponent(firmName)}"
+            "&mobile=${Uri.encodeComponent(mobile)}"
+            "&pin_code=${Uri.encodeComponent(pinCode)}",
+      );
+
+      final response = await http.get(uri);
+      if (!mounted) return;
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final bool exists = data['exists'] == true;
+
+        setState(() {
+          _firmVerified = exists;
+          _verifiedFirmName = exists ? firmName : null;
+          _firmVerifyError = exists
+              ? null
+              : "No matching firm found in records. Please check firm name, mobile & PIN code.";
+          if (exists) {
+            _lastVerifiedSignature = signature;
+            _registeredFirms = {firmName}; // ✅ only show the verified firm
+            _firmLocked[firmName] = true;
+            _showFirmDropdown = false;
+          }
+        });
+
+        if (exists && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              backgroundColor: Colors.green,
+              content: Text("✅ Firm '$firmName' verified successfully!"),
+            ),
+          );
+        }
+      } else {
+        setState(() => _firmVerifyError =
+        "Server error (${response.statusCode}). Please try again.");
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _firmVerifyError = "Verification failed: $e");
+    } finally {
+      if (mounted) setState(() => _isVerifyingFirm = false);
     }
   }
 
@@ -1654,12 +1920,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
   // ============================================================
   void _start1MinLocationTimer() {
     _minuteLocationTimer?.cancel();
-    _minuteLocationTimer =
-        Timer.periodic(const Duration(minutes: 1), (_) async {
-          await _fetchAndUpdateCurrentLocation();
-          await _refreshHierarchyLiveLocations();
-          _checkAutoPunchOut();
-        });
+    _minuteLocationTimer = Timer.periodic(const Duration(minutes: 1), (_) async {
+      // 1. Get fresh GPS + address
+      await _fetchAndUpdateCurrentLocation();
+
+      // 2. ✅ Push live location to server (so other roles can see it)
+      await _pushLiveLocationToServer();
+
+      // 3. Refresh hierarchy (so we see others' updated locations)
+      await _refreshHierarchyLiveLocations();
+
+      // 4. Check auto punch-out
+      _checkAutoPunchOut();
+    });
   }
 
   Future<void> _checkAutoPunchOut() async {
@@ -1737,39 +2010,77 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _updateAddressFromPosition(Position position) async {
-    String resolvedAddress;
+    // ── Geocode lat/long → human-readable address ──
+    String resolvedAddress = currentLiveAddress ?? 'Fetching address...';
+
     try {
-      List<Placemark> placemarks = await placemarkFromCoordinates(
+      final List<Placemark> placemarks = await placemarkFromCoordinates(
         position.latitude,
         position.longitude,
       );
 
       if (placemarks.isNotEmpty) {
-        Placemark place = placemarks.first;
-        final parts = [
-          place.street,
-          place.subLocality,
-          place.locality,
-          place.postalCode
-        ].where((p) => p != null && p.trim().isNotEmpty).toList();
-        resolvedAddress = parts.isNotEmpty
-            ? parts.join(', ')
-            : "Lat: ${position.latitude.toStringAsFixed(4)}, Long: ${position.longitude.toStringAsFixed(4)}";
-      } else {
-        resolvedAddress =
-        "Lat: ${position.latitude.toStringAsFixed(4)}, Long: ${position.longitude.toStringAsFixed(4)}";
+        final Placemark p = placemarks.first;
+
+        // Build a proper multi-part address (street, locality, city, state, pincode)
+        final List<String> parts = [];
+
+        // Street / building (most specific)
+        final street = [
+          p.name,
+          p.street,
+          p.subLocality,
+        ].where((s) => s != null && s.trim().isNotEmpty).map((s) => s!.trim()).toSet().toList();
+        if (street.isNotEmpty) parts.add(street.join(', '));
+
+        // Locality / area
+        if (p.locality != null && p.locality!.trim().isNotEmpty) {
+          parts.add(p.locality!.trim());
+        }
+        if (p.subAdministrativeArea != null &&
+            p.subAdministrativeArea!.trim().isNotEmpty) {
+          parts.add(p.subAdministrativeArea!.trim());
+        }
+
+        // City
+        if (p.administrativeArea != null &&
+            p.administrativeArea!.trim().isNotEmpty) {
+          parts.add(p.administrativeArea!.trim());
+        }
+
+        // Postal code
+        if (p.postalCode != null && p.postalCode!.trim().isNotEmpty) {
+          parts.add(p.postalCode!.trim());
+        }
+
+        // Country
+        if (p.country != null && p.country!.trim().isNotEmpty) {
+          parts.add(p.country!.trim());
+        }
+
+        if (parts.isNotEmpty) {
+          resolvedAddress = parts.join(', ');
+        }
       }
     } catch (e) {
-      resolvedAddress =
-      "Lat: ${position.latitude.toStringAsFixed(4)}, Long: ${position.longitude.toStringAsFixed(4)}";
+      debugPrint("Geocoding error: $e");
+      // Fallback: keep a coordinate-based string so users still see something useful
+      resolvedAddress = "Lat: ${position.latitude.toStringAsFixed(5)}, "
+          "Long: ${position.longitude.toStringAsFixed(5)}";
     }
 
     if (!mounted) return;
+
     setState(() {
-      currentLiveAddress = resolvedAddress;
       currentLatitude = position.latitude;
       currentLongitude = position.longitude;
+      currentLiveAddress = resolvedAddress;   // ✅ FIXED: actually assign
+      isGpsEnabled = true;
     });
+
+    // ✅ Push immediately on GPS lock / movement so other dashboards
+    //    (Sales Officer, ASM, RSM, ZSM, Sales Head) see the proper address
+    _pushLiveLocationToServer();
   }
 
   // ============================================================
@@ -2062,9 +2373,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return total;
   }
 
+
   // ============================================================
-  // ROLE-BASED LIVE LOCATION CARD
-  // ============================================================
+// ROLE-BASED LIVE LOCATION CARD (FULL ADDRESS DISPLAY)
+// ============================================================
   Widget _buildRoleBasedLocationCard() {
     return Container(
       padding: const EdgeInsets.all(16),
@@ -2076,6 +2388,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // ── Header ──
           Row(
             children: [
               const Icon(Icons.my_location, color: Colors.redAccent, size: 20),
@@ -2094,8 +2407,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ),
                     Text(
                       "Role: $userRole • ${hierarchyList.length} User(s) Visible",
-                      style:
-                      const TextStyle(fontSize: 11, color: Colors.grey),
+                      style: const TextStyle(fontSize: 11, color: Colors.grey),
                     ),
                   ],
                 ),
@@ -2110,8 +2422,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 tooltip: "Refresh Hierarchy",
               ),
               Container(
-                padding:
-                const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
                   color: isGpsEnabled
                       ? Colors.green.shade50
@@ -2135,7 +2446,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ],
           ),
           const SizedBox(height: 12),
-          // Logged-in user's true GPS Address via Geocoding
+
+          // ── Logged-in user's own live location ──
           Container(
             width: double.infinity,
             padding: const EdgeInsets.all(10),
@@ -2153,12 +2465,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     const Icon(Icons.person_pin_circle,
                         color: Colors.blue, size: 16),
                     const SizedBox(width: 6),
-                    Text(
-                      "Your Live Location ($userName • $userId)",
-                      style: const TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.blue,
+                    Expanded(
+                      child: Text(
+                        "Your Live Location ($userName • $userId)",
+                        style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.blue,
+                        ),
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
                   ],
@@ -2171,6 +2486,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ],
             ),
           ),
+
+          // ── Team members list ──
           if (isLoadingHierarchy)
             const Padding(
               padding: EdgeInsets.all(20),
@@ -2203,14 +2520,51 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     'N/A';
                 final String name = item['name']?.toString() ?? 'User';
                 final String role = item['role']?.toString() ?? 'Salesman';
-                final String assignedRoute = item['assigned_route']?.toString() ?? 'Not Assigned';
+                final String route =
+                    item['assigned_route']?.toString() ?? 'Not Assigned';
 
-                // Show API location for other users
-                final String listUserLiveLocation = item['city']?.toString() ?? item['address']?.toString() ?? 'Fetching route...';
-                final bool isLive = (item['is_live'] == 1 || item['is_live'] == '1' || item['is_live'] == true);
-                final isCurrentUser = (empId == userId);
+                // ✅ Only read 'address' and 'live_address' from API.
+                //    'location' and 'city' have been removed because
+                //    manage_salesman.php does not reliably return them.
+                final String rawAddress =
+                    item['address']?.toString().trim() ?? '';
+                final String rawLive =
+                    item['live_address']?.toString().trim() ?? '';
 
-                // Skip own entry since we already showed it at the top via raw geocoding
+                final double? lat =
+                double.tryParse(item['latitude']?.toString() ?? '');
+                final double? lng =
+                double.tryParse(item['longitude']?.toString() ?? '');
+
+                // ── Resolve location with priority: address → live_address → coords
+                String liveLocation;
+                if (rawAddress.isNotEmpty &&
+                    !rawAddress.startsWith('Fetching') &&
+                    !rawAddress.startsWith('GPS') &&
+                    !rawAddress.startsWith('Location permission') &&
+                    !rawAddress.startsWith('Unable to fetch')) {
+                  liveLocation = rawAddress;
+                } else if (rawLive.isNotEmpty &&
+                    !rawLive.startsWith('Fetching') &&
+                    !rawLive.startsWith('GPS') &&
+                    !rawLive.startsWith('Location permission') &&
+                    !rawLive.startsWith('Unable to fetch')) {
+                  liveLocation = rawLive;
+                } else if (lat != null && lng != null) {
+                  liveLocation =
+                  "Lat: ${lat.toStringAsFixed(5)}, Long: ${lng.toStringAsFixed(5)}";
+                } else {
+                  liveLocation = 'Location not available';
+                }
+
+                final String lastUpdated =
+                    item['last_updated']?.toString() ?? '';
+                final bool isLive = (item['is_live'] == 1 ||
+                    item['is_live'] == '1' ||
+                    item['is_live'] == true);
+                final bool isCurrentUser = (empId == userId);
+
+                // Skip showing self in the list (already shown above)
                 if (isCurrentUser) return const SizedBox.shrink();
 
                 return Card(
@@ -2222,60 +2576,141 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     side: const BorderSide(color: _AdminPalette.border),
                   ),
                   child: Padding(
-                    padding: const EdgeInsets.all(8.0),
-                    child: ListTile(
-                      dense: true,
-                      contentPadding: EdgeInsets.zero,
-                      leading: CircleAvatar(
-                        radius: 14,
-                        backgroundColor: _AdminPalette.primaryBrown,
-                        child: Text(
-                          role.isNotEmpty
-                              ? role.substring(0, 1).toUpperCase()
-                              : "U",
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                      title: Text(
-                        "$name ($empId) - $role",
-                        style: const TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 12,
-                        ),
-                      ),
-                      subtitle: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const SizedBox(height: 2),
-                          Text(
-                            "📍 $listUserLiveLocation",
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontSize: 11),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            "🛣️ Route: $assignedRoute",
-                            style: const TextStyle(
-                              fontSize: 11,
-                              color: _AdminPalette.primaryBrown,
-                              fontWeight: FontWeight.w600,
+                    padding: const EdgeInsets.all(10.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // ── Row 1: Avatar + Name + Live badge ──
+                        Row(
+                          children: [
+                            CircleAvatar(
+                              radius: 14,
+                              backgroundColor: _AdminPalette.primaryBrown,
+                              child: Text(
+                                role.isNotEmpty
+                                    ? role.substring(0, 1).toUpperCase()
+                                    : 'U',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
                             ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                "$name ($empId)",
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 12,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: isLive
+                                    ? Colors.green.shade50
+                                    : Colors.grey.shade200,
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                  color: isLive ? Colors.green : Colors.grey,
+                                ),
+                              ),
+                              child: Text(
+                                isLive ? "● Live" : "○ Offline",
+                                style: TextStyle(
+                                  color: isLive
+                                      ? Colors.green.shade800
+                                      : Colors.grey.shade700,
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+
+                        // ── Row 2: Role ──
+                        Row(
+                          children: [
+                            const Icon(Icons.badge,
+                                size: 12, color: Colors.grey),
+                            const SizedBox(width: 4),
+                            Text(
+                              "Role: $role",
+                              style: const TextStyle(
+                                  fontSize: 10, color: Colors.grey),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+
+                        // ── Row 3: FULL Live Location ──
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Icon(Icons.location_on,
+                                size: 12, color: Colors.redAccent),
+                            const SizedBox(width: 4),
+                            Expanded(
+                              child: Text(
+                                "Location: $liveLocation",
+                                style: const TextStyle(fontSize: 11),
+                                maxLines: 3,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+
+                        // ── Row 4: Route ──
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Icon(Icons.route,
+                                size: 12, color: _AdminPalette.primaryBrown),
+                            const SizedBox(width: 4),
+                            Expanded(
+                              child: Text(
+                                "Route: $route",
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  color: _AdminPalette.primaryBrown,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
+                        ),
+
+                        // ── Row 5: Last updated ──
+                        if (lastUpdated.isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Row(
+                            children: [
+                              const Icon(Icons.update,
+                                  size: 11, color: Colors.grey),
+                              const SizedBox(width: 4),
+                              Expanded(
+                                child: Text(
+                                  "Updated: $lastUpdated",
+                                  style: const TextStyle(
+                                      fontSize: 9, color: Colors.grey),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
                           ),
                         ],
-                      ),
-                      trailing: Text(
-                        isLive ? "Live" : "Offline",
-                        style: TextStyle(
-                          color: isLive ? Colors.green : Colors.grey,
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
+                      ],
                     ),
                   ),
                 );
@@ -2290,6 +2725,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
   // BUILD
   // ============================================================
   @override
+// ============================================================
+// BUILD
+// ============================================================
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: _AdminPalette.bgWarm,
@@ -2297,6 +2736,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         child: SingleChildScrollView(
           child: Column(
             children: [
+              // ===================== HEADER =====================
               Container(
                 padding: const EdgeInsets.all(20),
                 decoration: const BoxDecoration(
@@ -2412,14 +2852,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ],
                 ),
               ),
+
+              // ===================== BODY =====================
               Padding(
                 padding: const EdgeInsets.all(16.0),
                 child: Column(
                   children: [
+                    // ── Live Hierarchy Card ──
                     _buildRoleBasedLocationCard(),
                     const SizedBox(height: 16),
 
-                    // Leave Management Card
+                    // ── Leave Management Card ──
                     Container(
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
@@ -2457,7 +2900,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ),
                     const SizedBox(height: 16),
 
-                    // Attendance & Punch Card
+                    // ── Attendance & Punch Card ──
                     Container(
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
@@ -2636,6 +3079,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               const SizedBox(height: 8),
                             ],
                           ],
+
                           // Captured Image Display
                           if (capturedImageFile != null ||
                               (capturedPhotoUrl != null &&
@@ -2679,7 +3123,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                       errorBuilder: (context, error,
                                           stackTrace) {
                                         return const Icon(Icons.person,
-                                            size: 50, color: Colors.grey);
+                                            size: 50,
+                                            color: Colors.grey);
                                       },
                                     )
                                         : (capturedPhotoUrl != null &&
@@ -2691,10 +3136,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                           ? capturedPhotoUrl!
                                           : '$API_BASE_URL${capturedPhotoUrl!}',
                                       fit: BoxFit.cover,
-                                      loadingBuilder: (context, child,
+                                      loadingBuilder: (context,
+                                          child,
                                           loadingProgress) {
-                                        if (loadingProgress == null)
-                                          return child;
+                                        if (loadingProgress ==
+                                            null) return child;
                                         return const Center(
                                           child:
                                           CircularProgressIndicator(
@@ -2703,14 +3149,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                           ),
                                         );
                                       },
-                                      errorBuilder: (context, error,
-                                          stackTrace) {
-                                        return const Icon(Icons.person,
-                                            size: 50, color: Colors.grey);
+                                      errorBuilder: (context,
+                                          error, stackTrace) {
+                                        return const Icon(
+                                            Icons.person,
+                                            size: 50,
+                                            color: Colors.grey);
                                       },
                                     )
                                         : const Icon(Icons.person,
-                                        size: 50, color: Colors.grey)),
+                                        size: 50,
+                                        color: Colors.grey)),
                                   ),
                                 ),
                               ),
@@ -2762,7 +3211,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ),
                     const SizedBox(height: 16),
 
-                    // Daily Report Log Card
+                    // ============================================================
+                    // DAILY REPORT LOG — SINGLE INSTANCE (fixes ticker error)
                     // ============================================================
                     Container(
                       padding: const EdgeInsets.all(16),
@@ -2776,9 +3226,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            // ---- Header ----
+                            // ── Header ──
                             Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              mainAxisAlignment:
+                              MainAxisAlignment.spaceBetween,
                               children: [
                                 const Text(
                                   "Daily Report Log",
@@ -2792,7 +3243,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                   children: [
                                     IconButton(
                                       icon: const Icon(Icons.refresh,
-                                          color: _AdminPalette.primaryBrown, size: 20),
+                                          color: _AdminPalette.primaryBrown,
+                                          size: 20),
                                       onPressed: () async {
                                         await _fetchDailyReports();
                                         setState(() {});
@@ -2800,8 +3252,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                       tooltip: "Refresh Firms",
                                     ),
                                     IconButton(
-                                      icon: const Icon(Icons.history, color: Colors.grey),
-                                      onPressed: _showDailyTaskHistoryModal,
+                                      icon: const Icon(Icons.history,
+                                          color: Colors.grey),
+                                      onPressed:
+                                      _showDailyTaskHistoryModal,
                                       tooltip: "Order History",
                                     ),
                                   ],
@@ -2810,16 +3264,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             ),
                             const SizedBox(height: 8),
 
-                            // ============================================================
-                            // FIRM NAME — Brown dropdown with checkboxes
-                            // ============================================================
+                            // ── Firm dropdown ──
                             Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
+                              crossAxisAlignment:
+                              CrossAxisAlignment.start,
                               children: [
-                                // ---- Trigger button ----
                                 GestureDetector(
                                   onTap: () {
-                                    setState(() => _showFirmDropdown = !_showFirmDropdown);
+                                    setState(() =>
+                                    _showFirmDropdown =
+                                    !_showFirmDropdown);
                                   },
                                   child: Container(
                                     width: double.infinity,
@@ -2827,12 +3281,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                         horizontal: 14, vertical: 14),
                                     decoration: BoxDecoration(
                                       color: _AdminPalette.primaryBrown,
-                                      borderRadius: BorderRadius.circular(12),
+                                      borderRadius:
+                                      BorderRadius.circular(12),
                                       border: Border.all(
                                         color: _showFirmDropdown
                                             ? _AdminPalette.goldAccent
                                             : _AdminPalette.primaryBrown,
-                                        width: _showFirmDropdown ? 2 : 1,
+                                        width:
+                                        _showFirmDropdown ? 2 : 1,
                                       ),
                                     ),
                                     child: Row(
@@ -2844,10 +3300,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                           child: Text(
                                             _isAddingNewFirm
                                                 ? "Adding new firm..."
-                                                : (_selectedFirmsMulti.isEmpty
+                                                : (_selectedFirmsMulti
+                                                .isEmpty
                                                 ? "Select Firm Name"
-                                                : _selectedFirmsMulti.length == 1
-                                                ? _selectedFirmsMulti.first
+                                                : _selectedFirmsMulti
+                                                .length ==
+                                                1
+                                                ? _selectedFirmsMulti
+                                                .first
                                                 : "${_selectedFirmsMulti.length} firms selected"),
                                             style: const TextStyle(
                                               color: Colors.white,
@@ -2868,18 +3328,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                   ),
                                 ),
 
-                                // ---- Expanded checkbox list ----
                                 if (_showFirmDropdown) ...[
                                   const SizedBox(height: 6),
                                   Container(
                                     decoration: BoxDecoration(
                                       color: _AdminPalette.primaryBrown,
-                                      borderRadius: BorderRadius.circular(12),
-                                      border:
-                                      Border.all(color: _AdminPalette.goldAccent, width: 1),
+                                      borderRadius:
+                                      BorderRadius.circular(12),
+                                      border: Border.all(
+                                          color:
+                                          _AdminPalette.goldAccent,
+                                          width: 1),
                                       boxShadow: [
                                         BoxShadow(
-                                          color: Colors.black.withOpacity(0.15),
+                                          color: Colors.black
+                                              .withOpacity(0.15),
                                           blurRadius: 8,
                                           offset: const Offset(0, 4),
                                         ),
@@ -2887,143 +3350,186 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                     ),
                                     child: Column(
                                       children: [
-                                        // Header row
                                         Padding(
-                                          padding: const EdgeInsets.symmetric(
-                                              horizontal: 14, vertical: 8),
+                                          padding: const EdgeInsets
+                                              .symmetric(
+                                              horizontal: 14,
+                                              vertical: 8),
                                           child: Row(
                                             children: [
                                               const Icon(Icons.list_alt,
-                                                  color: _AdminPalette.goldLight, size: 16),
+                                                  color: _AdminPalette
+                                                      .goldLight,
+                                                  size: 16),
                                               const SizedBox(width: 6),
                                               const Expanded(
                                                 child: Text(
-                                                  "Registered Firms (from daily_reports)",
+                                                  "Registered Firms",
                                                   style: TextStyle(
-                                                    color: _AdminPalette.goldLight,
+                                                    color: _AdminPalette
+                                                        .goldLight,
                                                     fontSize: 11,
-                                                    fontWeight: FontWeight.bold,
+                                                    fontWeight:
+                                                    FontWeight.bold,
                                                   ),
                                                 ),
                                               ),
-                                              if (_registeredFirms.isNotEmpty)
+                                              if (_registeredFirms
+                                                  .isNotEmpty)
                                                 TextButton(
                                                   onPressed: () {
                                                     setState(() {
-                                                      if (_selectedFirmsMulti.length ==
-                                                          _registeredFirms.length) {
-                                                        _selectedFirmsMulti.clear();
+                                                      if (_selectedFirmsMulti
+                                                          .length ==
+                                                          _registeredFirms
+                                                              .length) {
+                                                        _selectedFirmsMulti
+                                                            .clear();
                                                       } else {
-                                                        _selectedFirmsMulti = Set<String>.from(
+                                                        _selectedFirmsMulti =
+                                                        Set<String>.from(
                                                             _registeredFirms);
                                                       }
-                                                      _firmNameController.text =
-                                                          _selectedFirmsMulti.join(', ');
+                                                      _firmNameController
+                                                          .text =
+                                                          _selectedFirmsMulti
+                                                              .join(', ');
                                                     });
                                                   },
-                                                  style: TextButton.styleFrom(
-                                                    padding: EdgeInsets.zero,
-                                                    minimumSize: const Size(0, 0),
+                                                  style:
+                                                  TextButton.styleFrom(
+                                                    padding:
+                                                    EdgeInsets.zero,
+                                                    minimumSize:
+                                                    const Size(0, 0),
                                                     tapTargetSize:
-                                                    MaterialTapTargetSize.shrinkWrap,
+                                                    MaterialTapTargetSize
+                                                        .shrinkWrap,
                                                   ),
                                                   child: Text(
-                                                    _selectedFirmsMulti.length ==
-                                                        _registeredFirms.length
+                                                    _selectedFirmsMulti
+                                                        .length ==
+                                                        _registeredFirms
+                                                            .length
                                                         ? "Clear All"
                                                         : "Select All",
                                                     style: const TextStyle(
-                                                      color: _AdminPalette.goldAccent,
+                                                      color: _AdminPalette
+                                                          .goldAccent,
                                                       fontSize: 11,
-                                                      fontWeight: FontWeight.bold,
+                                                      fontWeight:
+                                                      FontWeight.bold,
                                                     ),
                                                   ),
                                                 ),
                                             ],
                                           ),
                                         ),
-                                        const Divider(color: Colors.white24, height: 1),
+                                        const Divider(
+                                            color: Colors.white24,
+                                            height: 1),
 
-                                        // Checkbox list
                                         if (_registeredFirms.isEmpty)
                                           const Padding(
                                             padding: EdgeInsets.all(14),
                                             child: Text(
                                               "No firms yet. Add your first firm below.",
                                               style: TextStyle(
-                                                  color: Colors.white70, fontSize: 12),
+                                                  color: Colors.white70,
+                                                  fontSize: 12),
                                             ),
                                           )
                                         else
                                           ConstrainedBox(
                                             constraints:
-                                            const BoxConstraints(maxHeight: 220),
+                                            const BoxConstraints(
+                                                maxHeight: 220),
                                             child: SingleChildScrollView(
                                               child: Column(
-                                                children:
-                                                _registeredFirms.map((firm) {
+                                                children: _registeredFirms
+                                                    .map((firm) {
                                                   final isChecked =
-                                                  _selectedFirmsMulti.contains(firm);
+                                                  _selectedFirmsMulti
+                                                      .contains(firm);
                                                   return InkWell(
                                                     onTap: () {
                                                       setState(() {
                                                         if (isChecked) {
-                                                          _selectedFirmsMulti.remove(firm);
+                                                          _selectedFirmsMulti
+                                                              .remove(firm);
                                                         } else {
-                                                          _selectedFirmsMulti.add(firm);
+                                                          _selectedFirmsMulti
+                                                              .add(firm);
                                                         }
-                                                        _firmNameController.text =
-                                                            _selectedFirmsMulti.join(', ');
+                                                        _firmNameController
+                                                            .text =
+                                                            _selectedFirmsMulti
+                                                                .join(', ');
                                                       });
                                                     },
                                                     child: Padding(
-                                                      padding: const EdgeInsets.symmetric(
-                                                          horizontal: 10, vertical: 6),
+                                                      padding: const EdgeInsets
+                                                          .symmetric(
+                                                          horizontal: 10,
+                                                          vertical: 6),
                                                       child: Row(
                                                         children: [
                                                           SizedBox(
                                                             height: 24,
                                                             width: 24,
                                                             child: Checkbox(
-                                                              value: isChecked,
-                                                              activeColor: _AdminPalette
+                                                              value:
+                                                              isChecked,
+                                                              activeColor:
+                                                              _AdminPalette
                                                                   .goldAccent,
-                                                              checkColor: _AdminPalette
+                                                              checkColor:
+                                                              _AdminPalette
                                                                   .primaryBrown,
                                                               side: const BorderSide(
-                                                                color: Colors.white,
-                                                                width: 1.5,
-                                                              ),
+                                                                  color: Colors
+                                                                      .white,
+                                                                  width: 1.5),
                                                               onChanged: (v) {
                                                                 setState(() {
-                                                                  if (v == true) {
+                                                                  if (v ==
+                                                                      true) {
                                                                     _selectedFirmsMulti
-                                                                        .add(firm);
+                                                                        .add(
+                                                                        firm);
                                                                   } else {
                                                                     _selectedFirmsMulti
-                                                                        .remove(firm);
+                                                                        .remove(
+                                                                        firm);
                                                                   }
                                                                   _firmNameController
                                                                       .text =
                                                                       _selectedFirmsMulti
-                                                                          .join(', ');
+                                                                          .join(
+                                                                          ', ');
                                                                 });
                                                               },
                                                             ),
                                                           ),
-                                                          const SizedBox(width: 8),
+                                                          const SizedBox(
+                                                              width: 8),
                                                           Expanded(
                                                             child: Text(
                                                               firm,
                                                               style: const TextStyle(
-                                                                color: Colors.white,
-                                                                fontSize: 13,
-                                                              ),
-                                                              overflow: TextOverflow.ellipsis,
+                                                                  color: Colors
+                                                                      .white,
+                                                                  fontSize:
+                                                                  13),
+                                                              overflow:
+                                                              TextOverflow
+                                                                  .ellipsis,
                                                             ),
                                                           ),
-                                                          const Icon(Icons.store,
-                                                              color: Colors.white54,
+                                                          const Icon(
+                                                              Icons.store,
+                                                              color: Colors
+                                                                  .white54,
                                                               size: 14),
                                                         ],
                                                       ),
@@ -3034,9 +3540,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                             ),
                                           ),
 
-                                        const Divider(color: Colors.white24, height: 1),
+                                        const Divider(
+                                            color: Colors.white24,
+                                            height: 1),
 
-                                        // Add New Firm
                                         InkWell(
                                           onTap: () {
                                             setState(() {
@@ -3048,19 +3555,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                           },
                                           child: const Padding(
                                             padding: EdgeInsets.symmetric(
-                                                horizontal: 14, vertical: 10),
+                                                horizontal: 14,
+                                                vertical: 10),
                                             child: Row(
                                               children: [
-                                                Icon(Icons.add_circle_outline,
-                                                    color: _AdminPalette.goldAccent,
+                                                Icon(
+                                                    Icons
+                                                        .add_circle_outline,
+                                                    color: _AdminPalette
+                                                        .goldAccent,
                                                     size: 18),
                                                 SizedBox(width: 8),
                                                 Text(
                                                   "Add New Firm",
                                                   style: TextStyle(
-                                                    color: _AdminPalette.goldAccent,
+                                                    color: _AdminPalette
+                                                        .goldAccent,
                                                     fontSize: 13,
-                                                    fontWeight: FontWeight.bold,
+                                                    fontWeight:
+                                                    FontWeight.bold,
                                                   ),
                                                 ),
                                               ],
@@ -3072,29 +3585,33 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                   ),
                                 ],
 
-                                // ---- Manual input mode (new firm) ----
                                 if (_isAddingNewFirm) ...[
                                   const SizedBox(height: 8),
                                   Row(
                                     children: [
                                       Expanded(
                                         child: TextFormField(
-                                          controller: _firmNameController,
+                                          controller:
+                                          _firmNameController,
                                           decoration: InputDecoration(
-                                            labelText: 'Enter New Firm Name',
+                                            labelText:
+                                            'Enter New Firm Name',
                                             border: OutlineInputBorder(
-                                                borderRadius: BorderRadius.circular(12)),
+                                                borderRadius:
+                                                BorderRadius.circular(
+                                                    12)),
                                             isDense: true,
                                           ),
-                                          validator: (v) =>
-                                          (v == null || v.trim().isEmpty)
+                                          validator: (v) => (v == null ||
+                                              v.trim().isEmpty)
                                               ? 'Enter Firm Name'
                                               : null,
                                         ),
                                       ),
                                       const SizedBox(width: 6),
                                       IconButton(
-                                        icon: const Icon(Icons.cancel, color: Colors.red),
+                                        icon: const Icon(Icons.cancel,
+                                            color: Colors.red),
                                         onPressed: () {
                                           setState(() {
                                             _isAddingNewFirm = false;
@@ -3110,7 +3627,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
                             const SizedBox(height: 12),
 
-                            // ---- Mobile + PIN ----
+                            // ── Mobile + PIN ──
                             Row(
                               children: [
                                 Expanded(
@@ -3122,10 +3639,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                       labelText: 'Mobile No.',
                                       counterText: '',
                                       border: OutlineInputBorder(
-                                          borderRadius: BorderRadius.circular(12)),
+                                          borderRadius:
+                                          BorderRadius.circular(12)),
                                       isDense: true,
                                     ),
-                                    validator: (v) => (v == null || v.length < 10)
+                                    validator: (v) =>
+                                    (v == null || v.length < 10)
                                         ? '10 Digits required'
                                         : null,
                                   ),
@@ -3140,176 +3659,343 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                       labelText: 'PIN Code',
                                       counterText: '',
                                       border: OutlineInputBorder(
-                                          borderRadius: BorderRadius.circular(12)),
+                                          borderRadius:
+                                          BorderRadius.circular(12)),
                                       isDense: true,
                                     ),
                                     validator: (v) =>
-                                    (v == null || v.length < 6) ? 'Invalid PIN' : null,
+                                    (v == null || v.length < 6)
+                                        ? 'Invalid PIN'
+                                        : null,
                                   ),
                                 ),
                               ],
                             ),
-                            const SizedBox(height: 12),
+                            const SizedBox(height: 10),
 
-                            // ---- Category ----
-                            DropdownButtonFormField<String>(
-                              value: selectedCategory,
-                              isExpanded: true,
-                              decoration: InputDecoration(
-                                labelText: 'Product Category',
-                                border: OutlineInputBorder(
-                                    borderRadius: BorderRadius.circular(12)),
-                                isDense: true,
+                            // ── Verify Firm button ──
+                            SizedBox(
+                              width: double.infinity,
+                              height: 42,
+                              child: ElevatedButton.icon(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: _firmVerified
+                                      ? Colors.green.shade700
+                                      : _AdminPalette.primaryBrown,
+                                  shape: RoundedRectangleBorder(
+                                      borderRadius:
+                                      BorderRadius.circular(12)),
+                                ),
+                                icon: _isVerifyingFirm
+                                    ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child:
+                                  CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                                    : Icon(
+                                  _firmVerified
+                                      ? Icons.verified
+                                      : Icons.verified_user_outlined,
+                                  color: Colors.white,
+                                  size: 18,
+                                ),
+                                label: Text(
+                                  _isVerifyingFirm
+                                      ? "Verifying..."
+                                      : _firmVerified
+                                      ? "Firm Verified ✓"
+                                      : "Verify Firm",
+                                  style: const TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 12),
+                                ),
+                                onPressed: _isVerifyingFirm
+                                    ? null
+                                    : _verifyFirmFromDatabase,
                               ),
-                              items: productCatalog.keys
-                                  .map((cat) => DropdownMenuItem(
-                                  value: cat, child: Text(cat)))
-                                  .toList(),
-                              onChanged: (cat) {
-                                if (cat != null) {
-                                  setState(() {
-                                    selectedCategory = cat;
-                                    final list = productCatalog[cat];
-                                    if (list != null && list.isNotEmpty) {
-                                      selectedProductName = list.first['name'] as String;
-                                      selectedProductPrice =
-                                          (list.first['price'] as num).toDouble();
-                                    }
-                                  });
-                                }
-                              },
                             ),
+
+                            // ── Verification feedback ──
+                            if (_firmVerifyError != null) ...[
+                              const SizedBox(height: 6),
+                              Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: Colors.red.shade50,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                      color: Colors.red.shade200),
+                                ),
+                                child: Row(
+                                  children: [
+                                    const Icon(Icons.error_outline,
+                                        color: Colors.red, size: 16),
+                                    const SizedBox(width: 6),
+                                    Expanded(
+                                      child: Text(
+                                        _firmVerifyError!,
+                                        style: const TextStyle(
+                                            color: Colors.red,
+                                            fontSize: 11),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                            if (_firmVerified &&
+                                _verifiedFirmName != null) ...[
+                              const SizedBox(height: 6),
+                              Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: Colors.green.shade50,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                      color: Colors.green.shade200),
+                                ),
+                                child: Row(
+                                  children: [
+                                    const Icon(Icons.check_circle,
+                                        color: Colors.green, size: 16),
+                                    const SizedBox(width: 6),
+                                    Expanded(
+                                      child: Text(
+                                        "Firm '$_verifiedFirmName' verified. You can now select products.",
+                                        style: const TextStyle(
+                                            color: Colors.green,
+                                            fontSize: 11),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+
                             const SizedBox(height: 12),
 
-                            // ---- Product ----
-                            if (selectedCategory != null &&
-                                productCatalog[selectedCategory] != null)
+                            // ── Product section ──
+                            if (_firmVerified) ...[
                               DropdownButtonFormField<String>(
-                                value: selectedProductName,
+                                value: selectedCategory,
                                 isExpanded: true,
                                 decoration: InputDecoration(
-                                  labelText: 'Select Item',
+                                  labelText: 'Product Category',
                                   border: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(12)),
+                                      borderRadius:
+                                      BorderRadius.circular(12)),
                                   isDense: true,
                                 ),
-                                items:
-                                productCatalog[selectedCategory]!.map((prod) {
-                                  return DropdownMenuItem<String>(
-                                    value: prod['name'] as String,
-                                    child: Text(
-                                        "${prod['name']} - ₹${prod['price']}"),
-                                  );
-                                }).toList(),
-                                onChanged: (prodName) {
-                                  if (prodName != null) {
-                                    final prod = productCatalog[selectedCategory]!
-                                        .firstWhere((e) => e['name'] == prodName);
+                                items: productCatalog.keys
+                                    .map((cat) => DropdownMenuItem(
+                                    value: cat, child: Text(cat)))
+                                    .toList(),
+                                onChanged: (cat) {
+                                  if (cat != null) {
                                     setState(() {
-                                      selectedProductName = prodName;
-                                      selectedProductPrice =
-                                          (prod['price'] as num).toDouble();
+                                      selectedCategory = cat;
+                                      final list =
+                                      productCatalog[cat];
+                                      if (list != null &&
+                                          list.isNotEmpty) {
+                                        selectedProductName =
+                                        list.first['name'] as String;
+                                        selectedProductPrice = (list
+                                            .first['price'] as num)
+                                            .toDouble();
+                                      }
                                     });
                                   }
                                 },
                               ),
-                            const SizedBox(height: 12),
+                              const SizedBox(height: 12),
 
-                            // ---- Quantity ----
-                            TextFormField(
-                              controller: _qtyController,
-                              keyboardType: TextInputType.number,
-                              decoration: InputDecoration(
-                                labelText: 'Quantity',
-                                border: OutlineInputBorder(
-                                    borderRadius: BorderRadius.circular(12)),
-                                isDense: true,
-                              ),
-                              onChanged: (_) => setState(() {}),
-                              validator: (v) =>
-                              (v == null || v.isEmpty) ? 'Enter Qty' : null,
-                            ),
-                            const SizedBox(height: 12),
-
-                            // ---- Total ----
-                            Container(
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                  color: _AdminPalette.cardHeaderBg,
-                                  borderRadius: BorderRadius.circular(12)),
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                children: [
-                                  const Text(
-                                    "Calculated Total:",
-                                    style: TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        color: _AdminPalette.inkDark),
+                              if (selectedCategory != null &&
+                                  productCatalog[selectedCategory] !=
+                                      null)
+                                DropdownButtonFormField<String>(
+                                  value: selectedProductName,
+                                  isExpanded: true,
+                                  decoration: InputDecoration(
+                                    labelText: 'Select Item',
+                                    border: OutlineInputBorder(
+                                        borderRadius:
+                                        BorderRadius.circular(12)),
+                                    isDense: true,
                                   ),
-                                  Text(
-                                    "₹${calculatedTotal.toStringAsFixed(2)}",
-                                    style: const TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 16,
-                                        color: Colors.green),
+                                  items: productCatalog[selectedCategory]!
+                                      .map((prod) {
+                                    return DropdownMenuItem<String>(
+                                      value: prod['name'] as String,
+                                      child: Text(
+                                          "${prod['name']} - ₹${prod['price']}"),
+                                    );
+                                  }).toList(),
+                                  onChanged: (prodName) {
+                                    if (prodName != null) {
+                                      final prod = productCatalog[
+                                      selectedCategory]!
+                                          .firstWhere((e) =>
+                                      e['name'] == prodName);
+                                      setState(() {
+                                        selectedProductName = prodName;
+                                        selectedProductPrice =
+                                            (prod['price'] as num)
+                                                .toDouble();
+                                      });
+                                    }
+                                  },
+                                ),
+                              const SizedBox(height: 12),
+
+                              TextFormField(
+                                controller: _qtyController,
+                                keyboardType: TextInputType.number,
+                                decoration: InputDecoration(
+                                  labelText: 'Quantity',
+                                  border: OutlineInputBorder(
+                                      borderRadius:
+                                      BorderRadius.circular(12)),
+                                  isDense: true,
+                                ),
+                                onChanged: (_) => setState(() {}),
+                                validator: (v) => (v == null || v.isEmpty)
+                                    ? 'Enter Qty'
+                                    : null,
+                              ),
+                              const SizedBox(height: 12),
+
+                              Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                    color: _AdminPalette.cardHeaderBg,
+                                    borderRadius:
+                                    BorderRadius.circular(12)),
+                                child: Row(
+                                  mainAxisAlignment:
+                                  MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    const Text(
+                                      "Calculated Total:",
+                                      style: TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          color: _AdminPalette.inkDark),
+                                    ),
+                                    Text(
+                                      "₹${calculatedTotal.toStringAsFixed(2)}",
+                                      style: const TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 16,
+                                          color: Colors.green),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+
+                              Row(
+                                children: [
+                                  Expanded(
+                                    flex: 2,
+                                    child: SizedBox(
+                                      height: 44,
+                                      child: ElevatedButton.icon(
+                                        style:
+                                        ElevatedButton.styleFrom(
+                                          backgroundColor:
+                                          _AdminPalette.primaryBrown,
+                                        ),
+                                        icon: const Icon(
+                                            Icons.check_circle_outline,
+                                            color: Colors.white,
+                                            size: 18),
+                                        label: const Text(
+                                          "Save Order",
+                                          style: TextStyle(
+                                              color: Colors.white,
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 12),
+                                        ),
+                                        onPressed: () {
+                                          if (_taskFormKey.currentState!
+                                              .validate()) {
+                                            _submitDailyReportApi();
+                                          }
+                                        },
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    flex: 1,
+                                    child: SizedBox(
+                                      height: 44,
+                                      child: ElevatedButton.icon(
+                                        style:
+                                        ElevatedButton.styleFrom(
+                                          backgroundColor:
+                                          _AdminPalette.whatsappGreen,
+                                        ),
+                                        icon: const Icon(Icons.send,
+                                            color: Colors.white,
+                                            size: 16),
+                                        label: const Text(
+                                          "WhatsApp",
+                                          style: TextStyle(
+                                              color: Colors.white,
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 11),
+                                        ),
+                                        onPressed:
+                                        _sendWhatsAppOrderAndSave,
+                                      ),
+                                    ),
                                   ),
                                 ],
                               ),
-                            ),
-                            const SizedBox(height: 12),
-
-                            // ---- Action Buttons ----
-                            Row(
-                              children: [
-                                Expanded(
-                                  flex: 2,
-                                  child: SizedBox(
-                                    height: 44,
-                                    child: ElevatedButton.icon(
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: _AdminPalette.primaryBrown,
-                                      ),
-                                      icon: const Icon(Icons.check_circle_outline,
-                                          color: Colors.white, size: 18),
-                                      label: const Text(
-                                        "Save Order",
-                                        style: TextStyle(
-                                            color: Colors.white,
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 12),
-                                      ),
-                                      onPressed: () {
-                                        if (_taskFormKey.currentState!.validate()) {
-                                          _submitDailyReportApi();
-                                        }
-                                      },
-                                    ),
-                                  ),
+                            ] else ...[
+                              Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.all(16),
+                                decoration: BoxDecoration(
+                                  color: Colors.grey.shade100,
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(
+                                      color: Colors.grey.shade300),
                                 ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  flex: 1,
-                                  child: SizedBox(
-                                    height: 44,
-                                    child: ElevatedButton.icon(
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: _AdminPalette.whatsappGreen,
+                                child: Column(
+                                  children: [
+                                    Icon(Icons.lock_outline,
+                                        color: Colors.grey.shade600,
+                                        size: 28),
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      "Product selection is locked",
+                                      style: TextStyle(
+                                        color: Colors.grey.shade700,
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 12,
                                       ),
-                                      icon: const Icon(Icons.send,
-                                          color: Colors.white, size: 16),
-                                      label: const Text(
-                                        "WhatsApp",
-                                        style: TextStyle(
-                                            color: Colors.white,
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 11),
-                                      ),
-                                      onPressed: _sendWhatsAppOrderAndSave,
                                     ),
-                                  ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      "Select a firm, enter mobile & PIN code, then tap 'Verify Firm'.",
+                                      textAlign: TextAlign.center,
+                                      style: TextStyle(
+                                          color: Colors.grey.shade600,
+                                          fontSize: 11),
+                                    ),
+                                  ],
                                 ),
-                              ],
-                            ),
+                              ),
+                            ],
                           ],
                         ),
                       ),
@@ -3361,11 +4047,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         fontSize: 10, color: _AdminPalette.inkDark),
                     overflow: TextOverflow.ellipsis),
                 const SizedBox(height: 4),
-                Text("${dailyTaskHistory.length}",
-                    style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
-                        color: _AdminPalette.primaryBrown)),
+                Container(
+                  height: 22,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: _AdminPalette.primaryBrown
+                  ),
+                  child: Text("${dailyTaskHistory.length}", style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white)),
+                ),
               ],
             ),
           ),
