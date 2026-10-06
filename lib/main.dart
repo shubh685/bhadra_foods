@@ -8,7 +8,7 @@ import 'Admin_Dashboard.dart';
 import 'Log_In.dart';
 import 'Salesman_Dashboard.dart';
 
-const String API_URL = 'http://10.249.124.78/bhadra_foods/login.php';
+const String API_URL = 'http://192.168.0.104bhadra_foods/login.php';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -70,19 +70,22 @@ class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateM
   Future<void> _checkAutoLoginWithBackend() async {
     final prefs = await SharedPreferences.getInstance();
     final bool isLoggedIn = prefs.getBool('isLoggedIn') ?? false;
-    final String savedUsername = prefs.getString('saved_username') ?? '';
-    final String savedPassword = prefs.getString('saved_password') ?? '';
+    final String savedUsername = prefs.getString('name') ?? '';
+    final String savedPassword = prefs.getString('password') ?? '';
     final String savedRole = prefs.getString('role') ?? '';
 
     Widget targetScreen = const Login();
 
-    if (isLoggedIn && savedUsername.isNotEmpty && savedPassword.isNotEmpty && savedRole.isNotEmpty) {
+    if (isLoggedIn &&
+        savedUsername.isNotEmpty &&
+        savedPassword.isNotEmpty &&
+        savedRole.isNotEmpty) {
       try {
         final response = await http.post(
           Uri.parse(API_URL),
           headers: {'Content-Type': 'application/json'},
           body: jsonEncode({
-            'username': savedUsername,
+            'name': savedUsername, // this can be email, mobile, or emp_id
             'password': savedPassword,
             'role': savedRole,
           }),
@@ -94,7 +97,7 @@ class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateM
           if (data['status'] == 'success' && data['user'] != null) {
             final user = data['user'];
             String role = user['role'] ?? savedRole;
-            String empId = user['emp_id'] ?? '';
+            String empId = user['emp_id']?.toString() ?? '';
             String name = user['name'] ?? '';
             String email = user['email'] ?? '';
 
@@ -103,6 +106,7 @@ class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateM
             await prefs.setString('name', name);
             await prefs.setString('email', email);
             await prefs.setString('role', role);
+            await prefs.setBool('isLoggedIn', true);
 
             if (role.toLowerCase() == 'admin') {
               targetScreen = const AdminDashboard();
@@ -115,14 +119,18 @@ class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateM
               );
             }
           } else {
+            // Clear only login flag, keep nothing
             await prefs.clear();
+            targetScreen = const Login();
           }
         } else {
           await prefs.clear();
+          targetScreen = const Login();
         }
       } catch (e) {
         debugPrint("Auto Login Verification Failed: $e");
         await prefs.clear();
+        targetScreen = const Login();
       }
     }
 

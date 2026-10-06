@@ -42,7 +42,7 @@ class _LoginState extends State<Login> with SingleTickerProviderStateMixin {
   final TextEditingController _passwordController = TextEditingController();
 
   // Update this URL according to your server deployment
-  final String _loginApiUrl = "http://10.249.124.78/bhadra_foods/login.php";
+  final String _loginApiUrl = "http://192.168.0.104/bhadra_foods/login.php";
 
   final List<String> roles = [
     'Admin',
@@ -52,7 +52,6 @@ class _LoginState extends State<Login> with SingleTickerProviderStateMixin {
     'Regional Sales Manager',
     'Zone Wise Sales Manager',
     'Sales Head',
-    'Super Stockiest'
   ];
 
   late final AnimationController _entrance = AnimationController(

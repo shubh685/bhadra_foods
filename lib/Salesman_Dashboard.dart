@@ -18,7 +18,7 @@ import 'dart:io' show File, Platform;
 import 'Log_In.dart';
 
 // API Base URL
-const String API_BASE_URL = 'http://10.249.124.78/bhadra_foods/';
+const String API_BASE_URL = 'http://192.168.0.104/bhadra_foods/';
 
 class _AdminPalette {
   static const darkHeaderTop = Color(0xFF381C00);
@@ -192,11 +192,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _startPunchCheckTimer();
 
     _fetchProductCatalog();
-    _fetchAttendanceStatus();
     _fetchDailyReports();
-    _fetchAssignedRoute();
     _fetchLeaveHistory();
     fetchHierarchyAndRoutes();
+
+    // 🛑 FIX: Fetch attendance AFTER assigned route resolves the correct emp_id/userId
+    _fetchAssignedRoute().then((_) {
+      _fetchAttendanceStatus();
+    });
   }
 
   Future<void> _initFaceDetector() async {
@@ -724,22 +727,29 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     _isFetchingAttendance = true;
     try {
-      final url = Uri.parse("${API_BASE_URL}get_attendance.php?emp_id=$userId");
+      // Pass both emp_id and user_id to cover backend query variations
+      final url = Uri.parse("${API_BASE_URL}get_attendance.php?emp_id=$userId&user_id=$userId");
+      debugPrint("🔍 Fetching attendance for identifier: $userId from $url");
+
       final response = await http.get(url);
 
       if (!mounted || _isDisposed) return;
       if (response.statusCode != 200) {
-        debugPrint("Attendance HTTP ${response.statusCode}");
+        debugPrint("❌ Attendance HTTP Error: ${response.statusCode}");
         return;
       }
 
-      final Map<String, dynamic> data = json.decode(response.body);
-      final isSuccess = data['status'] == true ||
-          data['status'] == 'success' ||
-          data['status'] == 1 ||
-          data['status'] == '1';
-      if (!isSuccess) return;
+      final dynamic decodedBody = json.decode(response.body);
+      debugPrint("📥 Attendance API Response: ${response.body}");
 
+      Map<String, dynamic> data = {};
+      if (decodedBody is Map<String, dynamic>) {
+        data = decodedBody;
+      } else if (decodedBody is List) {
+        data = {'history': decodedBody};
+      }
+
+      // Safely extract list from various possible response keys
       final List rawList = (data['history'] ??
           data['data'] ??
           data['attendance'] ??
@@ -749,6 +759,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       if (!mounted || _isDisposed) return;
 
       if (rawList.isEmpty) {
+        debugPrint("⚠️ Attendance list is empty for emp_id: $userId");
         _safeSetState(() {
           attendanceHistory = [];
           isCheckedIn = false;
@@ -816,7 +827,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         lastPunchDay = fetchedDay;
       });
     } catch (e) {
-      debugPrint("Attendance API Error: $e");
+      debugPrint("❌ Attendance API Parsing Error: $e");
     } finally {
       _isFetchingAttendance = false;
     }
