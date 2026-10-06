@@ -10,7 +10,6 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
 import 'package:permission_handler/permission_handler.dart';
 import 'Forgot_Pwd.dart';
-import 'Register.dart';
 
 class _Palette {
   static const bgTop = Color(0xFF381C00);     // Dark warm brown (top)
@@ -43,7 +42,7 @@ class _LoginState extends State<Login> with SingleTickerProviderStateMixin {
   final TextEditingController _passwordController = TextEditingController();
 
   // Update this URL according to your server deployment
-  final String _loginApiUrl = "http://192.168.0.104/bhadra_foods/login.php";
+  final String _loginApiUrl = "http://10.249.124.78/bhadra_foods/login.php";
 
   final List<String> roles = [
     'Admin',
@@ -622,23 +621,6 @@ class _LoginState extends State<Login> with SingleTickerProviderStateMixin {
                                         style: GoogleFonts.plusJakartaSans(
                                           color: Colors.grey[700],
                                           fontSize: 13,
-                                        ),
-                                      ),
-                                      GestureDetector(
-                                        onTap: () {
-                                          Navigator.push(
-                                            context,
-                                            MaterialPageRoute(builder: (_) => const Registeration()),
-                                          );
-                                        },
-                                        child: Text(
-                                          'Register',
-                                          style: GoogleFonts.plusJakartaSans(
-                                            color: _Palette.espresso,
-                                            fontWeight: FontWeight.bold,
-                                            decoration: TextDecoration.underline,
-                                            fontSize: 13,
-                                          ),
                                         ),
                                       ),
                                     ],

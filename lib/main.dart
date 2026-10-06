@@ -8,7 +8,7 @@ import 'Admin_Dashboard.dart';
 import 'Log_In.dart';
 import 'Salesman_Dashboard.dart';
 
-const String API_URL = 'http://192.168.0.102/bhadra_foods/login.php';
+const String API_URL = 'http://10.249.124.78/bhadra_foods/login.php';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();

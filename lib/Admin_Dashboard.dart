@@ -1,8 +1,10 @@
 import 'dart:async';
-import 'package:bhad_foods/Log_In.dart';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'dart:convert';
+import 'package:geolocator/geolocator.dart';
+import 'package:geocoding/geocoding.dart';
+import 'package:bhad_foods/Log_In.dart';
 
 class _AdminPalette {
   static const darkHeaderTop = Color(0xFF3D2314);
@@ -16,7 +18,7 @@ class _AdminPalette {
 }
 
 // API Base URL
-const String API_BASE_URL = 'http://192.168.0.104/bhadra_foods/';
+const String API_BASE_URL = 'http://10.249.124.78/bhadra_foods/';
 
 // Model for Admin User
 class AdminModel {
@@ -54,7 +56,7 @@ class AdminModel {
   }
 }
 
-// Model for Salesman mapped directly to MySQL table 'manage_salesmna'
+// Model for Salesman mapped directly to MySQL table 'manage_salesman'
 class SalesmanModel {
   String id;
   String name;
@@ -125,10 +127,10 @@ class SalesmanModel {
       city: json['city'] ?? '',
       phone: json['mobile'] ?? '',
       email: json['email'] ?? '',
-      lastUpdated: json['last_updated'] ?? '',
+      lastUpdated: json['last_updated'] ?? json['updated_at'] ?? '',
       isLive: json['is_live'] == 1 || json['is_live'] == true,
       assignedRoute: json['assigned_route'] ?? '',
-      liveLocation: json['live_location'] ?? '',
+      liveLocation: json['live_location'] ?? json['location'] ?? '',
       latitude: lat,
       longitude: lng,
     );
@@ -188,7 +190,6 @@ class AttendanceRecord {
   }
 }
 
-// Model for Product Catalog
 // Model for Product Catalog
 class ProductItem {
   String id;
@@ -335,10 +336,12 @@ class AdminDashboard extends StatefulWidget {
 class _AdminDashboardState extends State<AdminDashboard> {
   late Timer _timer;
   DateTime _currentTime = DateTime.now();
+
   // Auto password generation
   bool isGeneratingPassword = false;
   String generatedPassword = '';
   bool showGeneratedPassword = false;
+
   // API Data Lists
   List<SalesmanModel> salesmenList = [];
   List<ProductItem> productCatalog = [];
@@ -349,6 +352,13 @@ class _AdminDashboardState extends State<AdminDashboard> {
 
   // Selected Employee filter for feed
   String _selectedEmpIdFilter = 'all';
+
+  // Selected Role filter for Salesman Tracking Cards
+  String _selectedRoleFilter = 'All';
+
+  // Location details map
+  Map<String, String> _geocodedAddresses = {};
+  bool _isFetchingLocation = false;
 
   // Loading states
   bool isLoadingSalesmen = false;
@@ -424,6 +434,115 @@ class _AdminDashboardState extends State<AdminDashboard> {
     return cleaned;
   }
 
+  // ==================== GEOLOCATOR & GEOCODING METHODS ====================
+
+  Future<void> _fetchSalesmanLocation(SalesmanModel salesman) async {
+    setState(() => _isFetchingLocation = true);
+    try {
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Location services are disabled.')),
+          );
+        }
+        setState(() => _isFetchingLocation = false);
+        return;
+      }
+
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Location permissions are denied.')),
+            );
+          }
+          setState(() => _isFetchingLocation = false);
+          return;
+        }
+      }
+
+      if (permission == LocationPermission.deniedForever) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Location permissions are permanently denied.')),
+          );
+        }
+        setState(() => _isFetchingLocation = false);
+        return;
+      }
+
+      Position position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+      );
+
+      String currentAddress = 'Unknown Location';
+      try {
+        List<Placemark> placemarks = await placemarkFromCoordinates(
+          position.latitude,
+          position.longitude,
+        );
+        if (placemarks.isNotEmpty) {
+          Placemark place = placemarks.first;
+          currentAddress =
+          '${place.street ?? ''}, ${place.subLocality ?? ''}, ${place.locality ?? ''}, ${place.postalCode ?? ''}';
+          currentAddress = currentAddress.replaceAll(RegExp(r'^,\s*|,\s*$'), '');
+        }
+      } catch (e) {
+        currentAddress = 'Lat: ${position.latitude.toStringAsFixed(4)}, Lng: ${position.longitude.toStringAsFixed(4)}';
+      }
+
+      setState(() {
+        salesman.latitude = position.latitude;
+        salesman.longitude = position.longitude;
+        salesman.liveLocation = currentAddress;
+        salesman.lastUpdated = DateTime.now().toString();
+        _geocodedAddresses[salesman.empId] = currentAddress;
+        _isFetchingLocation = false;
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Updated location for ${salesman.name}'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      setState(() => _isFetchingLocation = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error fetching location: $e')),
+        );
+      }
+    }
+  }
+
+  void _resolveAddressesForSalesmen() async {
+    for (var salesman in salesmenList) {
+      if (salesman.latitude != null && salesman.longitude != null) {
+        try {
+          List<Placemark> placemarks = await placemarkFromCoordinates(
+            salesman.latitude!,
+            salesman.longitude!,
+          );
+          if (placemarks.isNotEmpty) {
+            Placemark place = placemarks.first;
+            String address = '${place.subLocality ?? place.locality ?? ''}, ${place.locality ?? ''}';
+            if (mounted) {
+              setState(() {
+                _geocodedAddresses[salesman.empId] = address;
+              });
+            }
+          }
+        } catch (_) {}
+      }
+    }
+  }
+
   // ==================== LOAD ALL DATA ====================
 
   Future<void> _loadAllData() async {
@@ -488,6 +607,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
             salesmenList = users.map((json) => SalesmanModel.fromJson(json)).toList();
             isLoadingSalesmen = false;
           });
+          _resolveAddressesForSalesmen();
         } else {
           setState(() {
             errorMessage = data['message'] ?? 'Failed to load salesmen';
@@ -1009,8 +1129,6 @@ class _AdminDashboardState extends State<AdminDashboard> {
 
   // ==================== AUTO PASSWORD GENERATION ====================
 
-  // ==================== AUTO PASSWORD GENERATION ====================
-
   Future<String?> _generateAutoPassword(
       String role,
       String empId, {
@@ -1077,6 +1195,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
       return null;
     }
   }
+
   // ==================== UI HELPER METHODS ====================
 
   String _formatDateTime(DateTime dt) {
@@ -1086,6 +1205,19 @@ class _AdminDashboardState extends State<AdminDashboard> {
     String second = dt.second.toString().padLeft(2, '0');
     String period = dt.hour >= 12 ? 'PM' : 'AM';
     return "${dt.day.toString().padLeft(2, '0')} ${months[dt.month - 1]} ${dt.year} • $hour:$minute:$second $period";
+  }
+
+  String _formatTimeString(String rawDateTime) {
+    if (rawDateTime.isEmpty) return 'Just now';
+    try {
+      DateTime dt = DateTime.parse(rawDateTime);
+      String hour = (dt.hour % 12 == 0 ? 12 : dt.hour % 12).toString().padLeft(2, '0');
+      String minute = dt.minute.toString().padLeft(2, '0');
+      String period = dt.hour >= 12 ? 'PM' : 'AM';
+      return "$hour:$minute $period";
+    } catch (_) {
+      return rawDateTime;
+    }
   }
 
   Widget _buildLeaveStat(String label, int count, Color color) {
@@ -1161,6 +1293,194 @@ class _AdminDashboardState extends State<AdminDashboard> {
     );
   }
 
+  // ==================== LIVE SALESMAN TRACKING CARD WIDGET ====================
+
+  Widget _buildSalesmanLiveTrackingCard(SalesmanModel salesman) {
+    String formattedEmpId = _formatEmpId(salesman.empId, salesman.role);
+    String displayLocation = _geocodedAddresses[salesman.empId] ??
+        (salesman.liveLocation.isNotEmpty ? salesman.liveLocation : 'Location Pending');
+    String updatedTimeText = _formatTimeString(salesman.lastUpdated);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _AdminPalette.border),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.03),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Stack(
+                children: [
+                  CircleAvatar(
+                    radius: 20,
+                    backgroundColor: salesman.isLive ? Colors.green.shade50 : Colors.red.shade50,
+                    child: Icon(
+                      Icons.person,
+                      color: salesman.isLive ? Colors.green.shade700 : Colors.red.shade700,
+                      size: 22,
+                    ),
+                  ),
+                  Positioned(
+                    right: 0,
+                    bottom: 0,
+                    child: Container(
+                      width: 10,
+                      height: 10,
+                      decoration: BoxDecoration(
+                        color: salesman.isLive ? Colors.green : Colors.grey,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 1.5),
+                      ),
+                    ),
+                  )
+                ],
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            salesman.name,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 15,
+                              color: _AdminPalette.inkDark,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: _AdminPalette.primaryBrown.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            formattedEmpId,
+                            style: const TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              color: _AdminPalette.primaryBrown,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                          decoration: BoxDecoration(
+                            color: Colors.orange.shade50,
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            salesman.role,
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.orange.shade800,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          "City: ${salesman.city.isNotEmpty ? salesman.city : 'N/A'}",
+                          style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.access_time, size: 12, color: Colors.grey),
+                      const SizedBox(width: 4),
+                      Text(
+                        updatedTimeText,
+                        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _AdminPalette.inkDark),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  InkWell(
+                    onTap: () => _fetchSalesmanLocation(salesman),
+                    child: Container(
+                      padding: const EdgeInsets.all(6),
+                      decoration: BoxDecoration(
+                        color: Colors.blue.shade50,
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.my_location, size: 16, color: Colors.blue),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          const Divider(height: 18),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Icon(Icons.location_on, size: 16, color: Colors.redAccent),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  displayLocation,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: Colors.black87,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          if (salesman.assignedRoute.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                const Icon(Icons.alt_route, size: 14, color: Colors.teal),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    "Route: ${salesman.assignedRoute}",
+                    style: TextStyle(fontSize: 11, color: Colors.teal.shade800, fontWeight: FontWeight.w500),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          ]
+        ],
+      ),
+    );
+  }
+
   // ==================== ACTIVITY & MANAGEMENT DIALOG ====================
 
   void _showActivityManagementDialog() {
@@ -1193,7 +1513,6 @@ class _AdminDashboardState extends State<AdminDashboard> {
                 ],
               ),
               const SizedBox(height: 16),
-              // Option Cards
               _buildDialogOptionCard(
                 ctx,
                 title: "Leave Approvals",
@@ -1879,7 +2198,6 @@ class _AdminDashboardState extends State<AdminDashboard> {
               style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: _AdminPalette.inkDark),
             ),
             const SizedBox(height: 16),
-
             ListTile(
               leading: Container(
                 padding: const EdgeInsets.all(8),
@@ -1907,9 +2225,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                 _showNotificationsModal();
               },
             ),
-
             const Divider(),
-
             ListTile(
               leading: Container(
                 padding: const EdgeInsets.all(8),
@@ -1926,9 +2242,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                 _showProfileModal();
               },
             ),
-
             const Divider(),
-
             ListTile(
               leading: Container(
                 padding: const EdgeInsets.all(8),
@@ -1945,9 +2259,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                 _showChangePasswordModal();
               },
             ),
-
             const Divider(),
-
             ListTile(
               leading: Container(
                 padding: const EdgeInsets.all(8),
@@ -1964,7 +2276,6 @@ class _AdminDashboardState extends State<AdminDashboard> {
                 _showLogoutConfirmation();
               },
             ),
-
             const SizedBox(height: 16),
           ],
         ),
@@ -2281,20 +2592,14 @@ class _AdminDashboardState extends State<AdminDashboard> {
 
   // ==================== CATALOG MODAL WITH FULL CRUD ====================
 
-  // ==================== CATALOG MODAL WITH FULL CRUD ====================
-
   void _showCatalogModal({ProductItem? editItem}) {
-    final nameController =
-    TextEditingController(text: editItem?.name ?? '');
-    final priceController = TextEditingController(
-        text: editItem != null ? editItem.price.toStringAsFixed(0) : '');
-    final descController =
-    TextEditingController(text: editItem?.description ?? '');
+    final nameController = TextEditingController(text: editItem?.name ?? '');
+    final priceController = TextEditingController(text: editItem != null ? editItem.price.toStringAsFixed(0) : '');
+    final descController = TextEditingController(text: editItem?.description ?? '');
 
     String selectedCat = editItem?.category ?? "Main Item";
     String selectedSubCat = editItem?.subCategory ?? "Khakhra";
 
-    // If editing a celebration box, force sub-category
     if (selectedCat == "Celebration Box") {
       selectedSubCat = "Celebration Box";
     }
@@ -2306,8 +2611,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
           final bool isCelebrationBox = selectedCat == "Celebration Box";
 
           return Dialog(
-            shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
             backgroundColor: _AdminPalette.bgWarm,
             child: Container(
               padding: const EdgeInsets.all(20),
@@ -2327,15 +2631,12 @@ class _AdminDashboardState extends State<AdminDashboard> {
                                 decoration: BoxDecoration(
                                     color: Colors.blue.shade50,
                                     borderRadius: BorderRadius.circular(10)),
-                                child: const Icon(Icons.inventory_2,
-                                    color: Colors.blue),
+                                child: const Icon(Icons.inventory_2, color: Colors.blue),
                               ),
                               const SizedBox(width: 8),
                               Flexible(
                                 child: Text(
-                                  editItem == null
-                                      ? "Add Product"
-                                      : "Edit Product",
+                                  editItem == null ? "Add Product" : "Edit Product",
                                   style: const TextStyle(
                                       fontSize: 16,
                                       fontWeight: FontWeight.bold,
@@ -2344,8 +2645,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                                 ),
                               ),
                               IconButton(
-                                icon: const Icon(Icons.history,
-                                    color: Colors.blue),
+                                icon: const Icon(Icons.history, color: Colors.blue),
                                 onPressed: () {
                                   Navigator.pop(ctx);
                                   _showCatalogHistoryModal();
@@ -2360,23 +2660,17 @@ class _AdminDashboardState extends State<AdminDashboard> {
                       ],
                     ),
                     const SizedBox(height: 16),
-
-                    // CATEGORY
                     DropdownButtonFormField<String>(
                       value: selectedCat,
                       decoration: InputDecoration(
                         labelText: "Category",
                         filled: true,
                         fillColor: Colors.white,
-                        border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12)),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                       ),
                       items: const [
-                        DropdownMenuItem(
-                            value: "Main Item", child: Text("Main Item")),
-                        DropdownMenuItem(
-                            value: "Celebration Box",
-                            child: Text("Celebration Box")),
+                        DropdownMenuItem(value: "Main Item", child: Text("Main Item")),
+                        DropdownMenuItem(value: "Celebration Box", child: Text("Celebration Box")),
                       ],
                       onChanged: (v) {
                         setModalState(() {
@@ -2384,14 +2678,11 @@ class _AdminDashboardState extends State<AdminDashboard> {
                           if (selectedCat == "Main Item") {
                             selectedSubCat = "Khakhra";
                           } else {
-                            // Celebration Box → no sub-category choice
                             selectedSubCat = "Celebration Box";
                           }
                         });
                       },
                     ),
-
-                    // SUB-CATEGORY — only for Main Item
                     if (!isCelebrationBox) ...[
                       const SizedBox(height: 10),
                       DropdownButtonFormField<String>(
@@ -2400,42 +2691,27 @@ class _AdminDashboardState extends State<AdminDashboard> {
                           labelText: "Sub Category",
                           filled: true,
                           fillColor: Colors.white,
-                          border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12)),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                         ),
                         items: const [
-                          DropdownMenuItem(
-                              value: "Khakhra", child: Text("Khakhra")),
-                          DropdownMenuItem(
-                              value: "Bhakhari", child: Text("Bhakhari")),
-                          DropdownMenuItem(
-                              value: "Bites", child: Text("Bites")),
+                          DropdownMenuItem(value: "Khakhra", child: Text("Khakhra")),
+                          DropdownMenuItem(value: "Bhakhari", child: Text("Bhakhari")),
+                          DropdownMenuItem(value: "Bites", child: Text("Bites")),
                         ],
-                        onChanged: (v) =>
-                            setModalState(() => selectedSubCat = v!),
+                        onChanged: (v) => setModalState(() => selectedSubCat = v!),
                       ),
                     ],
-
                     const SizedBox(height: 10),
-
-                    // PRODUCT NAME
                     TextField(
                       controller: nameController,
                       decoration: InputDecoration(
-                        labelText: isCelebrationBox
-                            ? "Celebration Box Name *"
-                            : "Product Name *",
-                        hintText: isCelebrationBox
-                            ? "e.g. Diwali Family Combo"
-                            : "Product Name",
+                        labelText: isCelebrationBox ? "Celebration Box Name *" : "Product Name *",
+                        hintText: isCelebrationBox ? "e.g. Diwali Family Combo" : "Product Name",
                         filled: true,
                         fillColor: Colors.white,
-                        border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12)),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                       ),
                     ),
-
-                    // PRICE
                     const SizedBox(height: 10),
                     TextField(
                       controller: priceController,
@@ -2443,16 +2719,12 @@ class _AdminDashboardState extends State<AdminDashboard> {
                       decoration: InputDecoration(
                         labelText: "Price (₹) *",
                         hintText: "Price (₹)",
-                        prefixIcon: const Icon(Icons.currency_rupee,
-                            color: _AdminPalette.primaryBrown),
+                        prefixIcon: const Icon(Icons.currency_rupee, color: _AdminPalette.primaryBrown),
                         filled: true,
                         fillColor: Colors.white,
-                        border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12)),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                       ),
                     ),
-
-                    // DESCRIPTION — only for Celebration Box
                     if (isCelebrationBox) ...[
                       const SizedBox(height: 10),
                       TextField(
@@ -2460,37 +2732,31 @@ class _AdminDashboardState extends State<AdminDashboard> {
                         maxLines: 4,
                         decoration: InputDecoration(
                           labelText: "Items Included in this Celebration Box *",
-                          hintText:
-                          "e.g. Assorted Khakhra, Bhakhari, Bites, Dry Fruits & Festive Sweets",
+                          hintText: "e.g. Assorted Khakhra, Bhakhari, Bites, Dry Fruits & Festive Sweets",
                           filled: true,
                           fillColor: Colors.white,
-                          border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12)),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                           alignLabelWithHint: true,
                           prefixIcon: const Padding(
                             padding: EdgeInsets.only(bottom: 60),
-                            child: Icon(Icons.card_giftcard,
-                                color: _AdminPalette.primaryBrown),
+                            child: Icon(Icons.card_giftcard, color: _AdminPalette.primaryBrown),
                           ),
                         ),
                       ),
                       const SizedBox(height: 4),
                       Row(
                         children: [
-                          Icon(Icons.info_outline,
-                              size: 12, color: Colors.blue.shade400),
+                          Icon(Icons.info_outline, size: 12, color: Colors.blue.shade400),
                           const SizedBox(width: 4),
                           Expanded(
                             child: Text(
                               "List the items that will be included in this Celebration Box",
-                              style: TextStyle(
-                                  fontSize: 10, color: Colors.blue.shade600),
+                              style: TextStyle(fontSize: 10, color: Colors.blue.shade600),
                             ),
                           ),
                         ],
                       ),
                     ],
-
                     const SizedBox(height: 16),
                     SizedBox(
                       width: double.infinity,
@@ -2498,25 +2764,18 @@ class _AdminDashboardState extends State<AdminDashboard> {
                       child: ElevatedButton(
                         style: ElevatedButton.styleFrom(
                           backgroundColor: _AdminPalette.primaryBrown,
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12)),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                         ),
                         onPressed: () {
-                          if (nameController.text.isEmpty ||
-                              priceController.text.isEmpty) {
+                          if (nameController.text.isEmpty || priceController.text.isEmpty) {
                             ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                  content: Text(
-                                      "Please fill name and price")),
+                              const SnackBar(content: Text("Please fill name and price")),
                             );
                             return;
                           }
-                          if (isCelebrationBox &&
-                              descController.text.trim().isEmpty) {
+                          if (isCelebrationBox && descController.text.trim().isEmpty) {
                             ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                  content: Text(
-                                      "Please list the items included in this Celebration Box")),
+                              const SnackBar(content: Text("Please list the items included in this Celebration Box")),
                             );
                             return;
                           }
@@ -2524,13 +2783,9 @@ class _AdminDashboardState extends State<AdminDashboard> {
                           final product = ProductItem(
                             id: editItem?.id ?? '',
                             category: selectedCat,
-                            subCategory: isCelebrationBox
-                                ? "Celebration Box"
-                                : selectedSubCat,
+                            subCategory: isCelebrationBox ? "Celebration Box" : selectedSubCat,
                             name: nameController.text.trim(),
-                            price: double.tryParse(
-                                priceController.text.trim()) ??
-                                0,
+                            price: double.tryParse(priceController.text.trim()) ?? 0,
                             description: descController.text.trim(),
                           );
 
@@ -2542,12 +2797,8 @@ class _AdminDashboardState extends State<AdminDashboard> {
                           Navigator.pop(ctx);
                         },
                         child: Text(
-                          editItem == null
-                              ? "+ Add to Catalog"
-                              : "Update Item",
-                          style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold),
+                          editItem == null ? "+ Add to Catalog" : "Update Item",
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                         ),
                       ),
                     ),
@@ -2880,7 +3131,6 @@ class _AdminDashboardState extends State<AdminDashboard> {
     String selectedRole = editItem?.role ?? 'Salesman';
     bool isEditing = editItem != null;
 
-    // Reset any previous auto-password state
     generatedPassword = '';
     showGeneratedPassword = false;
 
@@ -2928,9 +3178,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
             });
           }
 
-          // Whether Auto button should be enabled
-          final bool canGenerateAuto =
-              nameCtrl.text.trim().isNotEmpty && !isGeneratingPassword;
+          final bool canGenerateAuto = nameCtrl.text.trim().isNotEmpty && !isGeneratingPassword;
 
           return Container(
             decoration: const BoxDecoration(
@@ -2955,9 +3203,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                       children: [
                         Expanded(
                           child: Text(
-                            isEditing
-                                ? "Edit Salesman Profile"
-                                : "Register New Salesman",
+                            isEditing ? "Edit Salesman Profile" : "Register New Salesman",
                             style: const TextStyle(
                               fontSize: 18,
                               fontWeight: FontWeight.bold,
@@ -2970,16 +3216,16 @@ class _AdminDashboardState extends State<AdminDashboard> {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             IconButton(
-                              icon: const Icon(Icons.history,
-                                  color: _AdminPalette.primaryBrown),
+                              icon: const Icon(Icons.history, color: _AdminPalette.primaryBrown),
                               onPressed: () {
                                 Navigator.pop(ctx);
                                 _showSalesmenHistoryModal();
                               },
                             ),
                             IconButton(
-                                icon: const Icon(Icons.close),
-                                onPressed: () => Navigator.pop(ctx)),
+                              icon: const Icon(Icons.close),
+                              onPressed: () => Navigator.pop(ctx),
+                            ),
                           ],
                         ),
                       ],
@@ -2987,26 +3233,21 @@ class _AdminDashboardState extends State<AdminDashboard> {
                     const SizedBox(height: 8),
                     Container(
                       width: double.infinity,
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 12),
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                       decoration: BoxDecoration(
                         color: _AdminPalette.primaryBrown.withOpacity(0.08),
                         borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                            color: _AdminPalette.primaryBrown.withOpacity(0.3)),
+                        border: Border.all(color: _AdminPalette.primaryBrown.withOpacity(0.3)),
                       ),
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
                           Row(
                             children: [
-                              const Icon(Icons.badge,
-                                  size: 20, color: _AdminPalette.primaryBrown),
+                              const Icon(Icons.badge, size: 20, color: _AdminPalette.primaryBrown),
                               const SizedBox(width: 8),
                               Text(
-                                isEditing
-                                    ? "Employee ID:"
-                                    : "Formatted Emp ID:",
+                                isEditing ? "Employee ID:" : "Formatted Emp ID:",
                                 style: const TextStyle(
                                   fontSize: 13,
                                   fontWeight: FontWeight.w600,
@@ -3016,8 +3257,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                             ],
                           ),
                           Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 12, vertical: 6),
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                             decoration: BoxDecoration(
                               color: _AdminPalette.primaryBrown,
                               borderRadius: BorderRadius.circular(8),
@@ -3036,13 +3276,9 @@ class _AdminDashboardState extends State<AdminDashboard> {
                       ),
                     ),
                     const SizedBox(height: 12),
-
-                    // Full Name (must be filled before generating auto password)
                     TextFormField(
                       controller: nameCtrl,
-                      validator: (v) => (v == null || v.trim().isEmpty)
-                          ? "Full Name is required"
-                          : null,
+                      validator: (v) => (v == null || v.trim().isEmpty) ? "Full Name is required" : null,
                       onChanged: (_) {
                         setModalState(() {});
                       },
@@ -3050,8 +3286,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                         labelText: "Full Name *",
                         filled: true,
                         fillColor: Colors.white,
-                        border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12)),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                       ),
                     ),
                     const SizedBox(height: 10),
@@ -3059,10 +3294,8 @@ class _AdminDashboardState extends State<AdminDashboard> {
                       controller: phoneCtrl,
                       keyboardType: TextInputType.phone,
                       validator: (v) {
-                        if (v == null || v.trim().isEmpty)
-                          return "Mobile Number is required";
-                        if (v.trim().length < 10)
-                          return "Enter a valid 10-digit mobile number";
+                        if (v == null || v.trim().isEmpty) return "Mobile Number is required";
+                        if (v.trim().length < 10) return "Enter a valid 10-digit mobile number";
                         return null;
                       },
                       decoration: InputDecoration(
@@ -3070,8 +3303,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                         prefixText: "+91 ",
                         filled: true,
                         fillColor: Colors.white,
-                        border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12)),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                       ),
                     ),
                     const SizedBox(height: 10),
@@ -3079,18 +3311,15 @@ class _AdminDashboardState extends State<AdminDashboard> {
                       controller: emailCtrl,
                       keyboardType: TextInputType.emailAddress,
                       validator: (v) {
-                        if (v == null || v.trim().isEmpty)
-                          return "Email Address is required";
-                        if (!v.contains('@') || !v.contains('.'))
-                          return "Enter a valid email address";
+                        if (v == null || v.trim().isEmpty) return "Email Address is required";
+                        if (!v.contains('@') || !v.contains('.')) return "Enter a valid email address";
                         return null;
                       },
                       decoration: InputDecoration(
                         labelText: "Email Address *",
                         filled: true,
                         fillColor: Colors.white,
-                        border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12)),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                       ),
                     ),
                     const SizedBox(height: 10),
@@ -3103,15 +3332,12 @@ class _AdminDashboardState extends State<AdminDashboard> {
                               labelText: "Role *",
                               filled: true,
                               fillColor: Colors.white,
-                              border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(12)),
+                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                             ),
                             items: roleOptions
                                 .map((r) => DropdownMenuItem(
                               value: r,
-                              child: Text(r,
-                                  style:
-                                  const TextStyle(fontSize: 14)),
+                              child: Text(r, style: const TextStyle(fontSize: 14)),
                             ))
                                 .toList(),
                             onChanged: (v) {
@@ -3134,8 +3360,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                               labelText: "City/Zone",
                               filled: true,
                               fillColor: Colors.white,
-                              border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(12)),
+                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                             ),
                           ),
                         ),
@@ -3144,46 +3369,35 @@ class _AdminDashboardState extends State<AdminDashboard> {
                     const SizedBox(height: 4),
                     Text(
                       "Formatted Emp ID stored into users table (e.g. BHFSM-01)",
-                      style:
-                      TextStyle(fontSize: 10, color: Colors.grey.shade600),
+                      style: TextStyle(fontSize: 10, color: Colors.grey.shade600),
                     ),
                     const SizedBox(height: 12),
-
-                    // ===== PASSWORD SECTION (only when adding new) =====
                     if (!isEditing) ...[
                       Row(
                         children: [
                           Expanded(
                             child: TextFormField(
                               controller: passwordCtrl,
-                              obscureText: false, // Show generated plain password
-                              readOnly: true, // Only auto-filled
+                              obscureText: false,
+                              readOnly: true,
                               decoration: InputDecoration(
                                 labelText: "Auto Password",
                                 hintText: "Tap ⚡ Auto to generate",
                                 filled: true,
                                 fillColor: Colors.white,
-                                border: OutlineInputBorder(
-                                    borderRadius: BorderRadius.circular(12)),
-                                prefixIcon: const Icon(Icons.lock,
-                                    color: _AdminPalette.primaryBrown),
+                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                                prefixIcon: const Icon(Icons.lock, color: _AdminPalette.primaryBrown),
                               ),
                             ),
                           ),
                           const SizedBox(width: 8),
-                          // ⚡ Auto Password Generate Button
                           SizedBox(
                             height: 56,
                             child: ElevatedButton(
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: canGenerateAuto
-                                    ? _AdminPalette.accentBadge
-                                    : Colors.grey.shade300,
-                                padding:
-                                const EdgeInsets.symmetric(horizontal: 14),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
+                                backgroundColor: canGenerateAuto ? _AdminPalette.accentBadge : Colors.grey.shade300,
+                                padding: const EdgeInsets.symmetric(horizontal: 14),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                               ),
                               onPressed: canGenerateAuto
                                   ? () async {
@@ -3207,12 +3421,9 @@ class _AdminDashboardState extends State<AdminDashboard> {
                                 ),
                               )
                                   : const Column(
-                                mainAxisAlignment:
-                                MainAxisAlignment.center,
+                                mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
-                                  Icon(Icons.bolt,
-                                      color: _AdminPalette.inkDark,
-                                      size: 20),
+                                  Icon(Icons.bolt, color: _AdminPalette.inkDark, size: 20),
                                   Text(
                                     "Auto",
                                     style: TextStyle(
@@ -3228,33 +3439,26 @@ class _AdminDashboardState extends State<AdminDashboard> {
                         ],
                       ),
                       const SizedBox(height: 6),
-                      // Hint when name is empty
                       if (nameCtrl.text.trim().isEmpty)
                         Padding(
                           padding: const EdgeInsets.only(bottom: 6, left: 4),
                           child: Row(
                             children: [
-                              Icon(Icons.info_outline,
-                                  size: 12, color: Colors.orange.shade700),
+                              Icon(Icons.info_outline, size: 12, color: Colors.orange.shade700),
                               const SizedBox(width: 4),
                               Expanded(
                                 child: Text(
                                   "Enter Full Name first to enable Auto password",
-                                  style: TextStyle(
-                                      fontSize: 10,
-                                      color: Colors.orange.shade700),
+                                  style: TextStyle(fontSize: 10, color: Colors.orange.shade700),
                                 ),
                               ),
                             ],
                           ),
                         ),
-                      // Show generated password chip
-                      if (generatedPassword.isNotEmpty &&
-                          passwordCtrl.text == generatedPassword)
+                      if (generatedPassword.isNotEmpty && passwordCtrl.text == generatedPassword)
                         Container(
                           width: double.infinity,
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 12, vertical: 8),
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                           decoration: BoxDecoration(
                             color: Colors.green.shade50,
                             borderRadius: BorderRadius.circular(10),
@@ -3262,8 +3466,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                           ),
                           child: Row(
                             children: [
-                              Icon(Icons.check_circle,
-                                  size: 16, color: Colors.green.shade700),
+                              Icon(Icons.check_circle, size: 16, color: Colors.green.shade700),
                               const SizedBox(width: 6),
                               Expanded(
                                 child: Column(
@@ -3294,7 +3497,6 @@ class _AdminDashboardState extends State<AdminDashboard> {
                         ),
                       const SizedBox(height: 8),
                     ],
-
                     const SizedBox(height: 8),
                     SizedBox(
                       width: double.infinity,
@@ -3302,18 +3504,15 @@ class _AdminDashboardState extends State<AdminDashboard> {
                       child: ElevatedButton(
                         style: ElevatedButton.styleFrom(
                           backgroundColor: _AdminPalette.primaryBrown,
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12)),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                         ),
                         onPressed: () {
                           if (formKey.currentState!.validate()) {
-                            // Auto password is mandatory when adding
                             if (!isEditing) {
                               if (passwordCtrl.text.trim().isEmpty) {
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   const SnackBar(
-                                    content: Text(
-                                        "Please tap ⚡ Auto to generate password"),
+                                    content: Text("Please tap ⚡ Auto to generate password"),
                                     backgroundColor: Colors.red,
                                   ),
                                 );
@@ -3348,8 +3547,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                         },
                         child: Text(
                           isEditing ? "Update Profile" : "Register Member",
-                          style: const TextStyle(
-                              color: Colors.white, fontWeight: FontWeight.bold),
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                         ),
                       ),
                     ),
@@ -3557,32 +3755,6 @@ class _AdminDashboardState extends State<AdminDashboard> {
                                           ),
                                         ],
                                       ),
-                                      const SizedBox(height: 4),
-                                      Row(
-                                        mainAxisAlignment: MainAxisAlignment.end,
-                                        children: [
-                                          Container(
-                                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                            decoration: BoxDecoration(
-                                              color: sm.isLive ? Colors.green.shade50 : Colors.red.shade50,
-                                              borderRadius: BorderRadius.circular(4),
-                                            ),
-                                            child: Text(
-                                              sm.isLive ? "● Live" : "○ Offline",
-                                              style: TextStyle(
-                                                fontSize: 9,
-                                                fontWeight: FontWeight.bold,
-                                                color: sm.isLive ? Colors.green : Colors.red,
-                                              ),
-                                            ),
-                                          ),
-                                          const SizedBox(width: 8),
-                                          Text(
-                                            "Updated: ${sm.lastUpdated}",
-                                            style: TextStyle(fontSize: 9, color: Colors.grey.shade500),
-                                          ),
-                                        ],
-                                      ),
                                     ],
                                   ),
                                 ),
@@ -3591,25 +3763,6 @@ class _AdminDashboardState extends State<AdminDashboard> {
                           ),
                         ),
                       ),
-                    if (salesmenList.isNotEmpty) ...[
-                      const SizedBox(height: 10),
-                      Container(
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: _AdminPalette.cardBg,
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceAround,
-                          children: [
-                            _buildLeaveStat("Total", salesmenList.length, Colors.grey),
-                            _buildLeaveStat("Live", salesmenList.where((s) => s.isLive).length, Colors.green),
-                            _buildLeaveStat("Offline", salesmenList.where((s) => !s.isLive).length, Colors.red),
-                          ],
-                        ),
-                      ),
-                    ],
-                    const SizedBox(height: 10),
                   ],
                 ),
               ),
@@ -3620,458 +3773,250 @@ class _AdminDashboardState extends State<AdminDashboard> {
     );
   }
 
-  // ==================== LIVE TRACKING MODAL ====================
-
-  void _showLiveTrackingModal() {
-    showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (context, setModalState) {
-          return Dialog(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-            backgroundColor: _AdminPalette.bgWarm,
-            insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-            child: Padding(
-              padding: const EdgeInsets.all(20.0),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Expanded(
-                        child: Row(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.all(8),
-                              decoration: BoxDecoration(color: Colors.teal.shade50, borderRadius: BorderRadius.circular(10)),
-                              child: const Icon(Icons.map_outlined, color: Colors.teal),
-                            ),
-                            const SizedBox(width: 10),
-                            const Flexible(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text("Live Salesman", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: _AdminPalette.inkDark), overflow: TextOverflow.ellipsis),
-                                  Text("Tracking Status", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: _AdminPalette.inkDark), overflow: TextOverflow.ellipsis),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      Row(
-                        children: [
-                          IconButton(
-                            icon: const Icon(Icons.refresh, color: _AdminPalette.primaryBrown),
-                            onPressed: () {
-                              _fetchSalesmenData().then((_) {
-                                setModalState(() {});
-                              });
-                            },
-                            tooltip: "Refresh",
-                          ),
-                          IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(ctx)),
-                        ],
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  if (isLoadingSalesmen)
-                    const Center(child: CircularProgressIndicator())
-                  else if (salesmenList.isEmpty)
-                    const Center(child: Text("No salesmen available"))
-                  else
-                    Flexible(
-                      child: ConstrainedBox(
-                        constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.55),
-                        child: ListView.builder(
-                          shrinkWrap: true,
-                          itemCount: salesmenList.length,
-                          itemBuilder: (context, index) {
-                            final sm = salesmenList[index];
-                            String formattedEmpId = _formatEmpId(sm.empId, sm.role);
-
-                            return Container(
-                              margin: const EdgeInsets.only(bottom: 10),
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: Colors.teal.shade50.withOpacity(0.4),
-                                borderRadius: BorderRadius.circular(16),
-                                border: Border.all(color: Colors.teal.shade100),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    children: [
-                                      const CircleAvatar(
-                                        radius: 20,
-                                        backgroundColor: Color(0xFFC8E6C9),
-                                        child: Icon(Icons.person, color: _AdminPalette.accentBadge),
-                                      ),
-                                      const SizedBox(width: 12),
-                                      Expanded(
-                                        child: Column(
-                                          crossAxisAlignment: CrossAxisAlignment.start,
-                                          children: [
-                                            Text("${sm.name} (${sm.role})", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14), overflow: TextOverflow.ellipsis),
-                                            Text("ID: $formattedEmpId", style: const TextStyle(fontSize: 11, color: Colors.grey)),
-                                          ],
-                                        ),
-                                      ),
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                        decoration: BoxDecoration(
-                                          color: sm.isLive ? Colors.green.shade100 : Colors.red.shade100,
-                                          borderRadius: BorderRadius.circular(8),
-                                        ),
-                                        child: Text(
-                                          sm.isLive ? "Live" : "Offline",
-                                          style: TextStyle(
-                                            color: sm.isLive ? Colors.green : Colors.red,
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 11,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 8),
-                                  if (sm.liveLocation.isNotEmpty || (sm.latitude != null && sm.longitude != null)) ...[
-                                    Container(
-                                      padding: const EdgeInsets.all(8),
-                                      decoration: BoxDecoration(
-                                        color: Colors.blue.shade50,
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                      child: Row(
-                                        children: [
-                                          const Icon(Icons.location_on, size: 16, color: Colors.blue),
-                                          const SizedBox(width: 8),
-                                          Expanded(
-                                            child: Text(
-                                              sm.liveLocation.isNotEmpty
-                                                  ? "Live: ${sm.liveLocation}"
-                                                  : (sm.latitude != null && sm.longitude != null)
-                                                  ? "Lat: ${sm.latitude!.toStringAsFixed(6)}, Lng: ${sm.longitude!.toStringAsFixed(6)}"
-                                                  : "No location data",
-                                              style: const TextStyle(fontSize: 12),
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                    const SizedBox(height: 6),
-                                  ],
-                                  Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                    children: [
-                                      Text("City: ${sm.city}", style: const TextStyle(fontSize: 11, color: Colors.grey)),
-                                      Text("Updated: ${sm.lastUpdated}", style: const TextStyle(fontSize: 10, color: Colors.grey)),
-                                    ],
-                                  ),
-                                ],
-                              ),
-                            );
-                          },
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          );
-        },
-      ),
-    );
-  }
-
-  // ==================== BUILD ====================
+  // ==================== BUILD MAIN DASHBOARD ====================
 
   @override
   Widget build(BuildContext context) {
+    List<SalesmanModel> filteredSalesmen = _selectedRoleFilter == 'All'
+        ? salesmenList
+        : salesmenList.where((s) => s.role == _selectedRoleFilter).toList();
+
     return Scaffold(
       backgroundColor: _AdminPalette.bgWarm,
-      body: SafeArea(
-        child: Column(
-          children: [
-            // Top Header Box
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [_AdminPalette.darkHeaderTop, _AdminPalette.darkHeaderBottom],
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
+      body: RefreshIndicator(
+        onRefresh: _loadAllData,
+        child: SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          child: Column(
+            children: [
+              // HEADER SECTION
+              Container(
+                padding: EdgeInsets.only(
+                  top: MediaQuery.of(context).padding.top + 16,
+                  left: 20,
+                  right: 20,
+                  bottom: 24,
                 ),
-              ),
-              child: Column(
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Expanded(
-                        child: Row(
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [_AdminPalette.darkHeaderTop, _AdminPalette.darkHeaderBottom],
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                  ),
+                  borderRadius: BorderRadius.vertical(bottom: Radius.circular(28)),
+                ),
+                child: Column(
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
                           children: [
-                            Stack(
-                              children: [
-                                const CircleAvatar(
-                                  radius: 26,
-                                  backgroundColor: Color(0xFFEADBCE),
-                                  child: Icon(Icons.store, size: 30, color: _AdminPalette.primaryBrown),
-                                ),
-                                Positioned(
-                                  right: 0,
-                                  bottom: 0,
-                                  child: Container(
-                                    padding: const EdgeInsets.all(2),
-                                    decoration: const BoxDecoration(color: _AdminPalette.accentBadge, shape: BoxShape.circle),
-                                    child: const Icon(Icons.visibility, size: 10, color: Colors.white),
-                                  ),
-                                )
-                              ],
+                            const CircleAvatar(
+                              radius: 22,
+                              backgroundColor: _AdminPalette.accentBadge,
+                              child: Icon(Icons.admin_panel_settings, color: _AdminPalette.inkDark),
                             ),
-                            const SizedBox(width: 14),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    isLoadingAdmin ? "Loading..." : (adminData?.name ?? "Bhadra Foods"),
-                                    style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white),
-                                    overflow: TextOverflow.ellipsis,
+                            const SizedBox(width: 12),
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  adminData?.name ?? "Admin Control Center",
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 18,
                                   ),
-                                  const SizedBox(height: 2),
-                                  Row(
-                                    children: [
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                        decoration: BoxDecoration(color: _AdminPalette.accentBadge, borderRadius: BorderRadius.circular(10)),
-                                        child: Text(
-                                          adminData?.role ?? "Supplier",
-                                          style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: _AdminPalette.inkDark),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Expanded(
-                                        child: Text(
-                                          adminData?.city ?? "Bhavnagar, Gujarat",
-                                          style: const TextStyle(fontSize: 11, color: Colors.white70),
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                      ),
-                                    ],
+                                ),
+                                Text(
+                                  adminData?.role ?? "Super Admin",
+                                  style: const TextStyle(
+                                    color: Colors.white70,
+                                    fontSize: 12,
                                   ),
-                                ],
-                              ),
+                                ),
+                              ],
                             ),
                           ],
                         ),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.more_vert, color: Colors.white),
-                        onPressed: _showOptionsMenu,
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 14),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.08),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: Colors.white12),
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const Icon(Icons.access_time_filled, color: _AdminPalette.accentBadge, size: 16),
-                        const SizedBox(width: 8),
-                        Flexible(
-                          child: Text(
-                            _formatDateTime(_currentTime),
-                            style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600, letterSpacing: 0.5),
-                            overflow: TextOverflow.ellipsis,
-                          ),
+                        IconButton(
+                          icon: const Icon(Icons.menu, color: Colors.white),
+                          onPressed: _showOptionsMenu,
                         ),
                       ],
                     ),
-                  ),
-                ],
+                    const SizedBox(height: 16),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(Icons.access_time, color: Colors.white70, size: 16),
+                          const SizedBox(width: 8),
+                          Text(
+                            _formatDateTime(_currentTime),
+                            style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+                          ),
+                        ],
+                      ),
+                    )
+                  ],
+                ),
               ),
-            ),
 
-            // Content Body
-            Expanded(
-              child: isLoadingSalesmen
-                  ? const Center(child: CircularProgressIndicator())
-                  : errorMessage != null
-                  ? Center(child: Text("Error: $errorMessage", style: const TextStyle(color: Colors.red)))
-                  : SingleChildScrollView(
-                padding: const EdgeInsets.all(20),
+              // DASHBOARD CONTENT
+              Padding(
+                padding: const EdgeInsets.all(16.0),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Stats Summary Row
-                    Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: _AdminPalette.cardBg,
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: _AdminPalette.border),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.03),
-                            blurRadius: 10,
-                            offset: const Offset(0, 4),
-                          )
-                        ],
-                      ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceAround,
-                        children: [
-                          _buildBodyStat("${salesmenList.length}", "Staff", Icons.people, _AdminPalette.primaryBrown),
-                          Container(height: 30, width: 1, color: _AdminPalette.border),
-                          _buildBodyStat("${salesmenList.where((s) => s.isLive).length}", "Live", Icons.sensors, Colors.green),
-                          Container(height: 30, width: 1, color: _AdminPalette.border),
-                          _buildBodyStat("${productCatalog.length}", "Items", Icons.inventory_2, Colors.blue),
-                          Container(height: 30, width: 1, color: _AdminPalette.border),
-                          _buildBodyStat("${leaveList.where((l) => l.status == 'Pending').length}", "Pending", Icons.hourglass_top, Colors.amber.shade800),
-                        ],
-                      ),
-                    ),
-
-                    const SizedBox(height: 20),
-
-                    // Management Action Grid
+                    // QUICK ACTION BUTTONS
                     GridView.count(
-                      crossAxisCount: 2,
+                      crossAxisCount: 3,
                       shrinkWrap: true,
                       physics: const NeverScrollableScrollPhysics(),
                       crossAxisSpacing: 12,
                       mainAxisSpacing: 12,
-                      childAspectRatio: 1.5,
                       children: [
-                        _buildActionCard("Manage Salesmen", Icons.person_add_alt_1, _AdminPalette.primaryBrown, _showSalesmenManagementModal),
-                        _buildActionCard("Product Catalog", Icons.inventory, Colors.blue, _showCatalogModal),
-                        _buildActionCard("Assign Routes", Icons.alt_route, Colors.teal, _showRouteManagementModal),
-                        _buildActionCard("Live Tracking", Icons.my_location, Colors.green, _showLiveTrackingModal),
+                        _buildActionCard("Add Salesman", Icons.person_add, Colors.blue, () => _showSalesmenManagementModal()),
+                        _buildActionCard("Catalog", Icons.inventory, Colors.purple, () => _showCatalogModal()),
+                        _buildActionCard("Assign Route", Icons.alt_route, Colors.teal, () => _showRouteManagementModal()),
                       ],
                     ),
+                    const SizedBox(height: 16),
 
+                    // ACTIVITY OVERVIEW CARD
+                    InkWell(
+                      onTap: _showActivityManagementDialog,
+                      borderRadius: BorderRadius.circular(16),
+                      child: Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: _AdminPalette.border),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.02),
+                              blurRadius: 8,
+                              offset: const Offset(0, 2),
+                            )
+                          ],
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            _buildBodyStat("${leaveList.where((l) => l.status == 'Pending').length}", "Leaves", Icons.time_to_leave, Colors.orange),
+                            _buildBodyStat("${attendanceHistory.length}", "Attendance", Icons.how_to_reg, Colors.blue),
+                            _buildBodyStat("${dailyReports.length}", "Reports", Icons.assessment, Colors.green),
+                          ],
+                        ),
+                      ),
+                    ),
                     const SizedBox(height: 20),
 
-                    // Activity & Management Card - Opens Dialog View
-                    _buildActivityManagementCard(),
+                    // ROLE-BASED LIVE TRACKING HEADER & FILTERS
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text(
+                          "Live Salesman Tracking",
+                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _AdminPalette.inkDark),
+                        ),
+                        Row(
+                          children: [
+                            if (_isFetchingLocation)
+                              const Padding(
+                                padding: EdgeInsets.only(right: 8.0),
+                                child: SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
+                              ),
+                            IconButton(
+                              icon: const Icon(Icons.refresh, color: _AdminPalette.primaryBrown),
+                              onPressed: _fetchSalesmenData,
+                              tooltip: "Refresh Location Data",
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+
+                    // ROLE FILTER CHIPS
+                    SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: [
+                          "All",
+                          ...roleOptions,
+                        ].map((role) {
+                          bool isSelected = _selectedRoleFilter == role;
+                          return Padding(
+                            padding: const EdgeInsets.only(right: 8.0),
+                            child: FilterChip(
+                              label: Text(role),
+                              selected: isSelected,
+                              selectedColor: _AdminPalette.primaryBrown,
+                              labelStyle: TextStyle(
+                                color: isSelected ? Colors.white : _AdminPalette.inkDark,
+                                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                                fontSize: 12,
+                              ),
+                              backgroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(20),
+                                side: BorderSide(
+                                  color: isSelected ? _AdminPalette.primaryBrown : _AdminPalette.border,
+                                ),
+                              ),
+                              onSelected: (bool selected) {
+                                setState(() {
+                                  _selectedRoleFilter = role;
+                                });
+                              },
+                            ),
+                          );
+                        }).toList(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+
+                    // ROLE BASED SALESMAN CARDS LIST
+                    if (isLoadingSalesmen)
+                      const Center(child: Padding(padding: EdgeInsets.all(24), child: CircularProgressIndicator()))
+                    else if (filteredSalesmen.isEmpty)
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(24),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: _AdminPalette.border),
+                        ),
+                        child: const Center(
+                          child: Text(
+                            "No active staff found for this role.",
+                            style: TextStyle(color: Colors.grey),
+                          ),
+                        ),
+                      )
+                    else
+                      ListView.builder(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        itemCount: filteredSalesmen.length,
+                        itemBuilder: (context, index) {
+                          return _buildSalesmanLiveTrackingCard(filteredSalesmen[index]);
+                        },
+                      ),
                   ],
                 ),
               ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // Activity & Management Card (Opens Dialog)
-  Widget _buildActivityManagementCard() {
-    int pendingLeavesCount = leaveList.where((l) => l.status == 'Pending').length;
-
-    return Container(
-      decoration: BoxDecoration(
-        color: _AdminPalette.cardBg,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: _AdminPalette.border),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.03),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          )
-        ],
-      ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: _showActivityManagementDialog,
-          borderRadius: BorderRadius.circular(20),
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: _AdminPalette.primaryBrown.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: const Icon(
-                    Icons.dashboard_customize,
-                    color: _AdminPalette.primaryBrown,
-                    size: 32,
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        "Activity & Management",
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                          color: _AdminPalette.inkDark,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        "Leaves • Attendance • Reports",
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey.shade600,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      Row(
-                        children: [
-                          if (pendingLeavesCount > 0) ...[
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: Colors.amber.shade100,
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                              child: Text(
-                                "$pendingLeavesCount Pending",
-                                style: TextStyle(
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.amber.shade800,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                          ],
-                          Text(
-                            "${attendanceHistory.length} Attendance • ${dailyReports.length} Reports",
-                            style: TextStyle(fontSize: 10, color: Colors.grey.shade500),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-                const Icon(
-                  Icons.arrow_forward_ios,
-                  size: 18,
-                  color: _AdminPalette.primaryBrown,
-                ),
-              ],
-            ),
+            ],
           ),
         ),
       ),

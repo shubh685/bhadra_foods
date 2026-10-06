@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
+import 'dart:typed_data';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:geolocator/geolocator.dart';
@@ -11,10 +12,13 @@ import 'package:intl/intl.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+// ✅ dart:io only on non-web
+import 'dart:io' show File, Platform;
+
 import 'Log_In.dart';
 
 // API Base URL
-const String API_BASE_URL = 'http://192.168.0.104/bhadra_foods/';
+const String API_BASE_URL = 'http://10.249.124.78/bhadra_foods/';
 
 class _AdminPalette {
   static const darkHeaderTop = Color(0xFF381C00);
@@ -32,39 +36,12 @@ class _AdminPalette {
   static const darkInputBg = Color(0xFF242F42);
 }
 
-class HierarchyUserLocation {
-  final String roleKey;
-  final String roleTitle;
-  final String name;
-  final String userId;
-  final Color themeColor;
-  String addressLocation;
-  String assignedRoute;
-  double? latitude;
-  double? longitude;
-  bool isOnline;
-
-  HierarchyUserLocation({
-    required this.roleKey,
-    required this.roleTitle,
-    required this.name,
-    required this.userId,
-    required this.themeColor,
-    required this.addressLocation,
-    this.assignedRoute = 'Not Assigned',
-    this.latitude,
-    this.longitude,
-    this.isOnline = false,
-  });
-}
-
 class DashboardScreen extends StatefulWidget {
   final String loggedInRole;
   final String loggedInUserId;
   final String loggedInUserName;
   final String email;
   final String mobile;
-
   const DashboardScreen({
     super.key,
     this.loggedInRole = 'S',
@@ -84,7 +61,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   late String userName;
   late String userEmail;
   String? assignedRoute;
-
+  bool _isCheckingFirm = false;
+  bool _isFirmExisting = false;
   bool isCheckedIn = false;
   late Stream<DateTime> _clockStream;
   StreamSubscription<Position>? _positionStreamSub;
@@ -95,9 +73,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
   double? currentLatitude;
   double? currentLongitude;
   bool isGpsEnabled = false;
-  File? capturedImageFile;
+
+  // ✅ Platform-safe "file" holders
+  File? capturedImageFile;       // native only
+  Uint8List? capturedImageBytes; // web + native (used for preview)
+  String? capturedPhotoUrl;      // remote URL from server
+
   String? lastPunchType;
-  String? capturedPhotoUrl;
   String? lastPunchDate;
   String? lastPunchTime;
   String? lastPunchDay;
@@ -112,6 +94,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   final _firmNameController = TextEditingController();
   final _mobileController = TextEditingController();
   final _pinCodeController = TextEditingController();
+  final _addressController = TextEditingController();
   final _qtyController = TextEditingController(text: '1');
 
   Map<String, List<Map<String, dynamic>>> productCatalog = {};
@@ -120,7 +103,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   String? selectedProductName;
   double selectedProductPrice = 0.0;
 
-  // Leave Management
   final List<String> leaveTypes = [
     'Casual Leave',
     'Maternity Leave',
@@ -132,30 +114,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
   final TextEditingController _leaveReasonController = TextEditingController();
   DateTimeRange? _selectedLeaveDateRange;
   List<Map<String, dynamic>> leaveHistory = [];
-  // Firm selection with multi-select checkboxes
-  Set<String> _selectedFirmsMulti = {};
+
+  final Set<String> _selectedFirmsMulti = {};
   bool _showFirmDropdown = false;
-  bool _isLoadingFirms = false;
-  // Daily Reports & Company Firms
+
   List<Map<String, dynamic>> dailyTaskHistory = [];
   List<dynamic> hierarchyList = [];
   bool isLoadingHierarchy = true;
 
-  // Registered firms cache for dropdown
-  // Registered firms cache for dropdown
-  Set<String> _registeredFirms = {};
+  final Set<String> _registeredFirms = {};
   bool _isAddingNewFirm = false;
-  String? _selectedFirm;
-  bool _firmVerified = false;         // true when firm+mobile+pin match exists in DB
-  bool _isVerifyingFirm = false;      // spinner while checking
-  String? _verifiedFirmName;          // exact firm name that was verified
-  String? _firmVerifyError;           // error text to show under button
-  String? _lastVerifiedSignature;
-  // ✅ ADD THESE — Firm lock tracking (for mobile + pin verification)
-  final Map<String, bool> _firmLocked = {};
-  bool _isCurrentFirmLocked = false;
 
-  // Role visibility map (Determines Hierarchy Logic)
+  // Reentrancy + dispose guards
+  bool _isPushingLocation = false;
+  bool _isFetchingAttendance = false;
+  bool _isDisposed = false;
+
   Map<String, List<String>> get roleVisibilityMap => {
     'Salesman': ['Salesman'],
     'Sales Officer': ['Salesman', 'Sales Officer'],
@@ -175,9 +149,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool get isPunchOutAllowed {
     final now = DateTime.now();
     final currentTimeInMinutes = now.hour * 60 + now.minute;
-    final startTime = 9 * 60;
-    final endTime = 18 * 60;
-
+    const startTime = 9 * 60;
+    const endTime = 18 * 60;
     if (now.weekday == DateTime.sunday) return false;
     return currentTimeInMinutes >= startTime && currentTimeInMinutes <= endTime;
   }
@@ -185,8 +158,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   String getPunchOutStatus() {
     final now = DateTime.now();
     final currentTimeInMinutes = now.hour * 60 + now.minute;
-    final endTime = 18 * 60;
-
+    const endTime = 18 * 60;
     if (now.weekday == DateTime.sunday) {
       return "⛔ Sunday - Punch Out Restricted";
     }
@@ -202,7 +174,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   @override
-  @override
   void initState() {
     super.initState();
     userRole = widget.loggedInRole;
@@ -212,7 +183,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     _clockStream = Stream.periodic(const Duration(seconds: 1), (_) => DateTime.now());
 
-    _initFaceDetector();
+    if (!kIsWeb) {
+      _initFaceDetector();
+    }
+
     _initLiveGpsTracking();
     _start1MinLocationTimer();
     _startPunchCheckTimer();
@@ -223,23 +197,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _fetchAssignedRoute();
     _fetchLeaveHistory();
     fetchHierarchyAndRoutes();
-
-    // ✅ Reset firm verification when any of the 3 key fields change
-    _firmNameController.addListener(_resetFirmVerification);
-    _mobileController.addListener(_resetFirmVerification);
-    _pinCodeController.addListener(_resetFirmVerification);
-  }
-
-  void _resetFirmVerification() {
-    if (_firmVerified) {
-      setState(() {
-        _firmVerified = false;
-        _verifiedFirmName = null;
-        _lastVerifiedSignature = null;
-      });
-    } else if (_firmVerifyError != null) {
-      setState(() => _firmVerifyError = null);
-    }
   }
 
   Future<void> _initFaceDetector() async {
@@ -259,39 +216,74 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  // ============================================================
-  // HIERARCHY & LIVE LOCATION
-  // ============================================================
+  // ═══════════════════════════════════════════════════
+  // SAFE SETSTATE — prevents '!_debugDoingThisLayout'
+  // ═══════════════════════════════════════════════════
+  void _safeSetState(VoidCallback fn) {
+    if (!mounted || _isDisposed) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && !_isDisposed) {
+        setState(fn);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _isDisposed = true;
+    _positionStreamSub?.cancel();
+    _positionStreamSub = null;
+    _minuteLocationTimer?.cancel();
+    _minuteLocationTimer = null;
+    _punchCheckTimer?.cancel();
+    _punchCheckTimer = null;
+
+    _firmNameController.dispose();
+    _mobileController.dispose();
+    _pinCodeController.dispose();
+    _addressController.dispose();
+    _qtyController.dispose();
+    _leaveReasonController.dispose();
+
+    try {
+      _faceDetector?.close();
+    } catch (_) {}
+    _faceDetector = null;
+
+    super.dispose();
+  }
+
+  // ═══════════════════════════════════════════════════
+  // HIERARCHY
+  // ═══════════════════════════════════════════════════
   Future<void> fetchHierarchyAndRoutes() async {
     try {
       final response = await http.get(
         Uri.parse('${API_BASE_URL}manage_salesman.php'),
       );
+      if (_isDisposed || !mounted) return;
 
       if (response.statusCode == 200) {
         final jsonResponse = jsonDecode(response.body);
         if (jsonResponse['status'] == true || jsonResponse['status'] == 'success') {
           final List data = jsonResponse['data'] ?? [];
           final visibleRoles = roleVisibilityMap[userRole] ?? [userRole];
-
           final filtered = data.where((item) {
             final role = item['role']?.toString() ?? '';
             return visibleRoles.contains(role);
           }).toList();
 
-          if (mounted) {
-            setState(() {
-              hierarchyList = filtered;
-              isLoadingHierarchy = false;
-            });
-          }
+          _safeSetState(() {
+            hierarchyList = filtered;
+            isLoadingHierarchy = false;
+          });
         } else {
-          if (mounted) setState(() => isLoadingHierarchy = false);
+          _safeSetState(() => isLoadingHierarchy = false);
         }
       }
     } catch (e) {
       debugPrint("Error fetching live hierarchy: $e");
-      if (mounted) setState(() => isLoadingHierarchy = false);
+      _safeSetState(() => isLoadingHierarchy = false);
     }
   }
 
@@ -300,6 +292,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       final response = await http.get(
         Uri.parse('${API_BASE_URL}manage_salesman.php'),
       );
+      if (_isDisposed || !mounted) return;
 
       if (response.statusCode == 200) {
         final jsonResponse = jsonDecode(response.body);
@@ -311,11 +304,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             return visibleRoles.contains(role);
           }).toList();
 
-          if (mounted) {
-            setState(() {
-              hierarchyList = filtered;
-            });
-          }
+          _safeSetState(() => hierarchyList = filtered);
         }
       }
     } catch (e) {
@@ -323,33 +312,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  @override
-  @override
-  void dispose() {
-    _firmNameController.removeListener(_resetFirmVerification);
-    _mobileController.removeListener(_resetFirmVerification);
-    _pinCodeController.removeListener(_resetFirmVerification);
-
-    _positionStreamSub?.cancel();
-    _minuteLocationTimer?.cancel();
-    _punchCheckTimer?.cancel();
-    try { _faceDetector?.close(); } catch (_) {}
-
-    _firmNameController.dispose();
-    _mobileController.dispose();
-    _pinCodeController.dispose();
-    _qtyController.dispose();
-    _leaveReasonController.dispose();
-    super.dispose();
-  }
-
   void _startPunchCheckTimer() {
     _punchCheckTimer?.cancel();
     _punchCheckTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (_isDisposed || !mounted) return;
       _fetchAttendanceStatus();
     });
   }
 
+  // ═══════════════════════════════════════════════════
+  // LOGOUT
+  // ═══════════════════════════════════════════════════
   void _showLogoutConfirmation() {
     showDialog(
       context: context,
@@ -373,17 +346,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ElevatedButton(
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.red,
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10)),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
             ),
             onPressed: () {
+              Navigator.pop(ctx);
+              if (!mounted) return;
               Navigator.pushAndRemoveUntil(
-                ctx,
-                MaterialPageRoute(builder: (ctx) => const Login()),
+                context,
+                MaterialPageRoute(builder: (_) => const Login()),
                     (route) => false,
-              );
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text("Logged out successfully!")),
               );
             },
             child: const Text("Logout", style: TextStyle(color: Colors.white)),
@@ -393,6 +364,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
+  // ═══════════════════════════════════════════════════
+  // CHANGE PASSWORD
+  // ═══════════════════════════════════════════════════
   void _showChangePasswordModal() {
     final oldController = TextEditingController();
     final newController = TextEditingController();
@@ -530,7 +504,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
           );
         },
       ),
-    );
+    ).whenComplete(() {
+      oldController.dispose();
+      newController.dispose();
+      confirmController.dispose();
+    });
   }
 
   Future<void> _changePassword(String identifier, String role,
@@ -546,6 +524,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           'new_password': newPassword,
         }),
       );
+      if (_isDisposed || !mounted) return;
 
       if (response.statusCode == 200) {
         final result = json.decode(response.body);
@@ -560,7 +539,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         }
       }
     } catch (e) {
-      if (mounted) {
+      if (mounted && !_isDisposed) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Password Change Error: $e')),
         );
@@ -568,76 +547,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  // ============================================================
-// PUSH LIVE LOCATION TO SERVER (every 1 minute)
-// ============================================================
-  // ============================================================
-  // PUSH LIVE LOCATION TO SERVER (every 1 minute)
-  // ────────────────────────────────────────────────────────────
-  // ✅ Pushes the GEOCODED full address (not just city) to the server
-  //    so that OTHER users viewing this person in their hierarchy card
-  //    see the proper live address instead of a bare city name.
-  // ============================================================
-  Future<void> _pushLiveLocationToServer() async {
-    try {
-      if (currentLatitude == null || currentLongitude == null) return;
-      if (currentLiveAddress == null || currentLiveAddress!.trim().isEmpty) {
-        return;
-      }
-
-      // Skip pushing placeholder/error strings
-      final addr = currentLiveAddress!.trim();
-      if (addr.startsWith('Fetching') ||
-          addr.startsWith('GPS') ||
-          addr.startsWith('Location permission') ||
-          addr.startsWith('Unable to fetch')) {
-        return;
-      }
-
-      final response = await http.post(
-        Uri.parse("${API_BASE_URL}manage_salesman.php"),
-        headers: {'Content-Type': 'application/json'},
-        body: json.encode({
-          'emp_id': userId,
-          'latitude': currentLatitude,
-          'longitude': currentLongitude,
-          // ✅ Send geocoded address in BOTH fields so whatever the PHP
-          //    side reads, it gets the full address.
-          'city': addr,
-          'address': addr,
-          'live_address': addr,
-          'is_live': 1,
-          'update_location_only': true,
-        }),
-      );
-
-      if (response.statusCode == 200) {
-        debugPrint("✅ Live location pushed: $userId → $addr");
-      } else {
-        debugPrint("⚠ Live location push HTTP ${response.statusCode}");
-      }
-    } catch (e) {
-      debugPrint("❌ Live location push error: $e");
-    }
-  }
-
   Future<void> _fetchAssignedRoute() async {
     try {
-      // ✅ Fetch ALL users (no emp_id filter) so we can match by email/name/id
       final response = await http.get(
         Uri.parse("${API_BASE_URL}manage_salesman.php"),
       );
+      if (_isDisposed || !mounted) return;
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         if ((data['status'] == true || data['status'] == 'success') &&
             data['data'] != null) {
           final users = data['data'] as List;
-
-          // Try to find the logged-in user by multiple strategies:
-          // 1. Exact emp_id match (widget userId)
-          // 2. Email match (most reliable — unique)
-          // 3. Name match (fallback)
           Map<String, dynamic>? matchedUser;
 
           for (var user in users) {
@@ -645,50 +566,36 @@ class _DashboardScreenState extends State<DashboardScreen> {
             final fetchedEmail = user['email']?.toString() ?? '';
             final fetchedName = user['name']?.toString() ?? '';
 
-            // Strategy 1: emp_id exact match
             if (fetchedEmpId == userId) {
               matchedUser = user;
               break;
             }
-            // Strategy 2: email match
             if (fetchedEmail.isNotEmpty &&
                 fetchedEmail.toLowerCase() == userEmail.toLowerCase()) {
               matchedUser = user;
               break;
             }
-            // Strategy 3: name match (last resort)
             if (fetchedName.isNotEmpty &&
                 fetchedName.toLowerCase() == userName.toLowerCase()) {
               matchedUser = user;
-              // Don't break — keep looking for a better match
             }
           }
 
-          // ✅ Capture into a non-nullable local variable
           final Map<String, dynamic>? matched = matchedUser;
-
-          if (matched != null && mounted) {
-            // ✅ Use the captured 'matched' variable — now safely non-null
+          if (matched != null && mounted && !_isDisposed) {
             final actualEmpId = matched['emp_id']?.toString() ?? '';
             final actualRoute =
                 matched['assigned_route']?.toString() ?? 'Not Assigned';
             final actualName = matched['name']?.toString() ?? '';
             final actualEmail = matched['email']?.toString() ?? '';
 
-            setState(() {
-              if (actualEmpId.isNotEmpty) {
-                userId = actualEmpId;
-              }
+            _safeSetState(() {
+              if (actualEmpId.isNotEmpty) userId = actualEmpId;
               assignedRoute = actualRoute;
-              if (actualName.isNotEmpty) {
-                userName = actualName;
-              }
-              if (actualEmail.isNotEmpty) {
-                userEmail = actualEmail;
-              }
+              if (actualName.isNotEmpty) userName = actualName;
+              if (actualEmail.isNotEmpty) userEmail = actualEmail;
             });
 
-            // ✅ Re-fetch attendance, leave, reports with the CORRECT emp_id
             _fetchAttendanceStatus();
             _fetchLeaveHistory();
             _fetchDailyReports();
@@ -700,9 +607,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  // ═══════════════════════════════════════════════════
+  // PRODUCT CATALOG
+  // ═══════════════════════════════════════════════════
   Future<void> _fetchProductCatalog() async {
     try {
       final response = await http.get(Uri.parse("${API_BASE_URL}catelog.php"));
+      if (_isDisposed || !mounted) return;
+
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         if ((data['status'] == true || data['status'] == 'success') &&
@@ -723,20 +635,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
             });
           }
 
-          if (mounted) {
-            setState(() {
-              productCatalog = tempCatalog;
-              if (productCatalog.isNotEmpty) {
-                selectedCategory = productCatalog.keys.first;
-                if (productCatalog[selectedCategory]!.isNotEmpty) {
-                  selectedProductName =
-                  productCatalog[selectedCategory]!.first['name'];
-                  selectedProductPrice =
-                  productCatalog[selectedCategory]!.first['price'];
-                }
+          _safeSetState(() {
+            productCatalog = tempCatalog;
+            if (productCatalog.isNotEmpty) {
+              selectedCategory = productCatalog.keys.first;
+              if (productCatalog[selectedCategory]!.isNotEmpty) {
+                selectedProductName =
+                productCatalog[selectedCategory]!.first['name'];
+                selectedProductPrice =
+                productCatalog[selectedCategory]!.first['price'];
               }
-            });
-          }
+            }
+          });
         }
       }
     } catch (e) {
@@ -759,11 +669,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text("Product Catalog",
-                style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: _AdminPalette.inkDark)),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text("Product Catalog",
+                    style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: _AdminPalette.inkDark)),
+              ],
+            ),
             const Divider(),
             Expanded(
               child: rawProductList.isEmpty
@@ -800,46 +715,116 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // ============================================================
-  // ATTENDANCE — FIXED for get_attendance.php
-  // ============================================================
+  // ═══════════════════════════════════════════════════
+  // ATTENDANCE
+  // ═══════════════════════════════════════════════════
   Future<void> _fetchAttendanceStatus() async {
+    if (_isFetchingAttendance) return;
+    if (_isDisposed || !mounted) return;
+
+    _isFetchingAttendance = true;
     try {
-      final response = await http
-          .get(Uri.parse("${API_BASE_URL}get_attendance.php?emp_id=$userId"));
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
+      final url = Uri.parse("${API_BASE_URL}get_attendance.php?emp_id=$userId");
+      final response = await http.get(url);
 
-        if (data['status'] == true && mounted) {
-          final List history = data['history'] ?? data['data'] ?? [];
-
-          String? latestPunchType;
-          if (history.isNotEmpty) {
-            latestPunchType = history.first['punch_type']?.toString();
-          }
-
-          setState(() {
-            attendanceHistory = List<Map<String, dynamic>>.from(history);
-            isCheckedIn = latestPunchType == 'PUNCH_IN';
-
-            if (history.isNotEmpty) {
-              final latest = history.first;
-              lastPunchType = latest['punch_type'];
-              capturedPhotoUrl = latest['photo'];
-              lastPunchDate = latest['punch_date'];
-              lastPunchTime = latest['punch_time'];
-              lastPunchDay = latest['day'];
-            }
-          });
-        }
+      if (!mounted || _isDisposed) return;
+      if (response.statusCode != 200) {
+        debugPrint("Attendance HTTP ${response.statusCode}");
+        return;
       }
+
+      final Map<String, dynamic> data = json.decode(response.body);
+      final isSuccess = data['status'] == true ||
+          data['status'] == 'success' ||
+          data['status'] == 1 ||
+          data['status'] == '1';
+      if (!isSuccess) return;
+
+      final List rawList = (data['history'] ??
+          data['data'] ??
+          data['attendance'] ??
+          data['records'] ??
+          []) as List;
+
+      if (!mounted || _isDisposed) return;
+
+      if (rawList.isEmpty) {
+        _safeSetState(() {
+          attendanceHistory = [];
+          isCheckedIn = false;
+          lastPunchType = null;
+          capturedPhotoUrl = null;
+          lastPunchDate = null;
+          lastPunchTime = null;
+          lastPunchDay = null;
+        });
+        return;
+      }
+
+      final List<Map<String, dynamic>> typed = rawList
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+
+      final Map<String, dynamic> latest = typed.first;
+
+      final String latestPunchType = (latest['punch_type']?.toString() ??
+          latest['type']?.toString() ??
+          latest['status']?.toString() ??
+          '').toUpperCase();
+
+      String? displayPhoto;
+      final String rawPhoto = latest['photo']?.toString() ??
+          latest['image']?.toString() ??
+          latest['photo_url']?.toString() ??
+          '';
+      if (rawPhoto.isNotEmpty) {
+        final parts = rawPhoto
+            .split(',')
+            .map((p) => p.trim())
+            .where((p) => p.isNotEmpty)
+            .toList();
+        if (parts.isNotEmpty) displayPhoto = parts.last;
+      }
+
+      final String todayStr = DateFormat('yyyy-MM-dd').format(DateTime.now());
+      final String latestDate = latest['punch_date']?.toString() ??
+          latest['date']?.toString() ??
+          latest['created_at']?.toString()?.split(' ').first ??
+          '';
+      final bool isToday = latestDate == todayStr;
+
+      final String fetchedTime = latest['punch_time']?.toString() ??
+          latest['time']?.toString() ??
+          (latest['created_at']?.toString()?.contains(' ') == true
+              ? latest['created_at'].toString().split(' ').last
+              : '');
+
+      String fetchedDay = latest['day']?.toString() ?? '';
+      if (fetchedDay.isEmpty && latestDate.isNotEmpty) {
+        try {
+          fetchedDay = DateFormat('EEEE').format(DateTime.parse(latestDate));
+        } catch (_) {}
+      }
+
+      _safeSetState(() {
+        attendanceHistory = typed;
+        isCheckedIn = isToday && latestPunchType == 'PUNCH_IN';
+        lastPunchType = latestPunchType.isEmpty ? null : latestPunchType;
+        capturedPhotoUrl = isToday ? displayPhoto : null;
+        lastPunchDate = latestDate;
+        lastPunchTime = fetchedTime;
+        lastPunchDay = fetchedDay;
+      });
     } catch (e) {
       debugPrint("Attendance API Error: $e");
+    } finally {
+      _isFetchingAttendance = false;
     }
   }
 
   void _showAttendanceHistoryModal() {
     _fetchAttendanceStatus();
+
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
@@ -866,10 +851,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   Row(
                     children: [
                       IconButton(
-                        icon: const Icon(Icons.refresh, color: _AdminPalette.primaryBrown),
+                        icon: const Icon(Icons.refresh,
+                            color: _AdminPalette.primaryBrown),
                         onPressed: () async {
                           await _fetchAttendanceStatus();
-                          setModalState(() {});
                         },
                         tooltip: "Refresh",
                       ),
@@ -878,7 +863,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         onPressed: () => Navigator.pop(ctx),
                       ),
                     ],
-                  )
+                  ),
                 ],
               ),
               const Divider(),
@@ -889,46 +874,152 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   itemCount: attendanceHistory.length,
                   itemBuilder: (ctx, idx) {
                     final item = attendanceHistory[idx];
-                    final isPunchIn = item['punch_type'] == 'PUNCH_IN';
-                    final photo = item['photo'];
+                    final pType = (item['punch_type']?.toString() ??
+                        item['type']?.toString() ??
+                        '').toUpperCase();
+                    final isPunchIn = pType == 'PUNCH_IN';
+                    final String rawPhoto = item['photo']?.toString() ??
+                        item['image']?.toString() ??
+                        '';
+
+                    String? displayPhoto;
+                    if (rawPhoto.isNotEmpty) {
+                      final photos = rawPhoto
+                          .split(',')
+                          .map((p) => p.trim())
+                          .where((p) => p.isNotEmpty)
+                          .toList();
+                      if (photos.isNotEmpty) displayPhoto = photos.last;
+                    }
+
+                    final String photoUrl = displayPhoto != null
+                        ? (displayPhoto.startsWith('http')
+                        ? displayPhoto
+                        : '$API_BASE_URL$displayPhoto')
+                        : '';
 
                     return Card(
                       color: _AdminPalette.cardBg,
                       margin: const EdgeInsets.symmetric(vertical: 6),
-                      child: ListTile(
-                        leading: CircleAvatar(
-                          backgroundColor: isPunchIn
-                              ? Colors.green.shade100
-                              : Colors.red.shade100,
-                          child: Icon(
-                            isPunchIn ? Icons.login : Icons.logout,
-                            color: isPunchIn ? Colors.green : Colors.red,
-                          ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        side: BorderSide(
+                          color: isPunchIn
+                              ? Colors.green.withOpacity(0.3)
+                              : Colors.red.withOpacity(0.3),
                         ),
-                        title: Text(
-                          isPunchIn ? "Punch In" : "Punch Out",
-                          style: const TextStyle(
-                              fontWeight: FontWeight.bold, fontSize: 14),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.all(10),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                CircleAvatar(
+                                  radius: 18,
+                                  backgroundColor: isPunchIn
+                                      ? Colors.green.shade100
+                                      : Colors.red.shade100,
+                                  child: Icon(
+                                    isPunchIn ? Icons.login : Icons.logout,
+                                    color: isPunchIn ? Colors.green : Colors.red,
+                                    size: 18,
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        isPunchIn ? "Punch In" : "Punch Out",
+                                        style: const TextStyle(
+                                            fontWeight: FontWeight.bold, fontSize: 14),
+                                      ),
+                                      Text(
+                                        "ID: ${item['id'] ?? '-'} | Emp: ${item['emp_id'] ?? '-'}",
+                                        style: const TextStyle(
+                                            fontSize: 10, color: Colors.grey),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                if (photoUrl.isNotEmpty)
+                                  ClipRRect(
+                                    borderRadius: BorderRadius.circular(8),
+                                    child: Image.network(
+                                      photoUrl,
+                                      width: 50,
+                                      height: 50,
+                                      fit: BoxFit.cover,
+                                      loadingBuilder: (context, child, progress) {
+                                        if (progress == null) return child;
+                                        return const SizedBox(
+                                          width: 50,
+                                          height: 50,
+                                          child: Center(
+                                            child: CircularProgressIndicator(
+                                                strokeWidth: 2),
+                                          ),
+                                        );
+                                      },
+                                      errorBuilder: (_, __, ___) => Container(
+                                        width: 50,
+                                        height: 50,
+                                        color: Colors.grey.shade200,
+                                        child: const Icon(Icons.person,
+                                            size: 28, color: Colors.grey),
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            _buildAttendanceDetailRow(
+                              Icons.calendar_today,
+                              "Date",
+                              item['punch_date']?.toString() ?? item['date']?.toString() ?? '--',
+                            ),
+                            _buildAttendanceDetailRow(
+                              Icons.access_time,
+                              "Time",
+                              item['punch_time']?.toString() ?? item['time']?.toString() ?? '--',
+                            ),
+                            _buildAttendanceDetailRow(
+                              Icons.today,
+                              "Day",
+                              item['day']?.toString() ?? '--',
+                            ),
+                            _buildAttendanceDetailRow(
+                              Icons.badge,
+                              "Role",
+                              item['role']?.toString() ?? '--',
+                            ),
+                            _buildAttendanceDetailRow(
+                              Icons.location_on,
+                              "Address",
+                              item['address']?.toString() ?? '--',
+                            ),
+                            _buildAttendanceDetailRow(
+                              Icons.my_location,
+                              "Latitude",
+                              item['latitude']?.toString() ?? '--',
+                            ),
+                            _buildAttendanceDetailRow(
+                              Icons.my_location,
+                              "Longitude",
+                              item['longitude']?.toString() ?? '--',
+                            ),
+                            _buildAttendanceDetailRow(
+                              Icons.update,
+                              "Updated At",
+                              item['updated_at']?.toString() ??
+                                  item['created_at']?.toString() ??
+                                  '--',
+                            ),
+                          ],
                         ),
-                        subtitle: Text(
-                          "📅 ${item['punch_date'] ?? ''} 🕐 ${item['punch_time'] ?? ''}\n📆 ${item['day'] ?? ''}",
-                          style: const TextStyle(fontSize: 12),
-                        ),
-                        trailing: photo != null && photo.toString().isNotEmpty
-                            ? ClipRRect(
-                          borderRadius: BorderRadius.circular(8),
-                          child: Image.network(
-                            photo.toString().startsWith('http')
-                                ? photo.toString()
-                                : '${API_BASE_URL}${photo.toString()}',
-                            width: 50,
-                            height: 50,
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) =>
-                            const Icon(Icons.person, size: 40),
-                          ),
-                        )
-                            : null,
                       ),
                     );
                   },
@@ -941,53 +1032,117 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // Submit Punch API — passing explicit device time
-  Future<void> _submitPunchApi(File photoFile, String punchType, {bool isAuto = false}) async {
+  bool get isPunchInAllowed {
+    final now = DateTime.now();
+    if (now.weekday == DateTime.sunday) return false;
+    final minutes = now.hour * 60 + now.minute;
+    return minutes < (18 * 60);
+  }
+
+  bool get showPunchInButton => !isCheckedIn && isPunchInAllowed;
+
+  Widget _buildAttendanceDetailRow(IconData icon, String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 13, color: _AdminPalette.primaryBrown),
+          const SizedBox(width: 6),
+          SizedBox(
+            width: 80,
+            child: Text(
+              "$label:",
+              style: const TextStyle(
+                fontSize: 11,
+                color: Colors.grey,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              (value.isEmpty || value == 'null') ? '--' : value,
+              style: const TextStyle(
+                fontSize: 11,
+                color: _AdminPalette.inkDark,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ═══════════════════════════════════════════════════
+  // PUNCH ATTENDANCE
+  // ═══════════════════════════════════════════════════
+  Future<void> _submitPunchApi(
+      XFile? photoXFile,
+      String punchType, {
+        bool isAuto = false,
+      }) async {
     try {
       var request = http.MultipartRequest(
           "POST", Uri.parse("${API_BASE_URL}punch_attendance.php"));
       request.fields['emp_id'] = userId;
       request.fields['role'] = userRole;
       request.fields['punch_type'] = punchType;
-      request.fields['latitude'] = (currentLatitude ?? 0.0).toString();
-      request.fields['longitude'] = (currentLongitude ?? 0.0).toString();
-
-      // Pass proper device time as requested
       request.fields['device_date'] = DateFormat('yyyy-MM-dd').format(DateTime.now());
       request.fields['device_time'] = DateFormat('HH:mm:ss').format(DateTime.now());
       request.fields['is_auto'] = isAuto ? '1' : '0';
 
-      if (photoFile.path.isNotEmpty) {
-        request.files.add(await http.MultipartFile.fromPath('photo', photoFile.path));
+      if (photoXFile != null) {
+        if (kIsWeb) {
+          final bytes = await photoXFile.readAsBytes();
+          request.files.add(http.MultipartFile.fromBytes(
+            'photo',
+            bytes,
+            filename: photoXFile.name,
+          ));
+        } else {
+          final f = File(photoXFile.path);
+          if (await f.exists()) {
+            request.files.add(await http.MultipartFile.fromPath('photo', f.path));
+          }
+        }
       }
 
       var streamedResponse = await request.send();
       var response = await http.Response.fromStream(streamedResponse);
 
+      if (_isDisposed || !mounted) return;
+
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         if (data['status'] == 'success' || data['status'] == true) {
-          if (mounted) {
-            setState(() {
-              isCheckedIn = (punchType == 'PUNCH_IN');
-              if (!isAuto) capturedImageFile = photoFile;
-              lastPunchType = punchType;
+          _safeSetState(() {
+            isCheckedIn = (punchType == 'PUNCH_IN');
+            lastPunchType = punchType;
+            if (punchType == 'PUNCH_IN') {
               capturedPhotoUrl = data['photo_url'] ?? capturedPhotoUrl;
-              lastPunchDate = data['punch_date'] ?? DateFormat('yyyy-MM-dd').format(DateTime.now());
-              lastPunchTime = data['punch_time'] ?? DateFormat('HH:mm:ss').format(DateTime.now());
-              lastPunchDay = data['day'] ?? DateFormat('EEEE').format(DateTime.now());
-            });
-          }
-          if (!mounted) return;
+            }
+            lastPunchDate = data['punch_date'] ??
+                DateFormat('yyyy-MM-dd').format(DateTime.now());
+            lastPunchTime = data['punch_time'] ??
+                DateFormat('HH:mm:ss').format(DateTime.now());
+            lastPunchDay =
+                data['day'] ?? DateFormat('EEEE').format(DateTime.now());
+          });
+
+          if (!mounted || _isDisposed) return;
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               backgroundColor: Colors.green,
-              content: Text(data['message'] ?? (isAuto ? 'Auto-Punched out successfully!' : 'Punch recorded successfully!')),
+              content: Text(data['message'] ??
+                  (isAuto
+                      ? 'Auto-Punched out successfully!'
+                      : 'Punch recorded successfully!')),
             ),
           );
           _fetchAttendanceStatus();
         } else {
-          if (!mounted) return;
+          if (!mounted || _isDisposed) return;
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               backgroundColor: Colors.red,
@@ -997,7 +1152,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         }
       }
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || _isDisposed) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
             backgroundColor: Colors.red,
@@ -1006,19 +1161,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  // ============================================================
+  // ═══════════════════════════════════════════════════
   // LEAVE MANAGEMENT
-  // ============================================================
+  // ═══════════════════════════════════════════════════
   Future<void> _fetchLeaveHistory() async {
     try {
       final response = await http.get(
         Uri.parse("${API_BASE_URL}manage_leaves.php?emp_id=$userId"),
       );
+      if (_isDisposed || !mounted) return;
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        if ((data['status'] == true || data['status'] == 'success') && mounted) {
-          setState(() {
+        if ((data['status'] == true || data['status'] == 'success') &&
+            mounted &&
+            !_isDisposed) {
+          _safeSetState(() {
             leaveHistory = List<Map<String, dynamic>>.from(
                 data['leaves'] ?? data['data'] ?? []);
           });
@@ -1043,18 +1201,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
           'reason': reason,
         }),
       );
+      if (_isDisposed || !mounted) return;
+
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         if (data['status'] == true || data['status'] == 'success') {
           await _fetchLeaveHistory();
-          if (!mounted) return;
+          if (!mounted || _isDisposed) return;
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
                 backgroundColor: Colors.green,
                 content: Text("Leave Application Submitted!")),
           );
         } else {
-          if (!mounted) return;
+          if (!mounted || _isDisposed) return;
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
                 backgroundColor: Colors.red,
@@ -1063,7 +1223,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         }
       }
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || _isDisposed) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
             backgroundColor: Colors.red,
@@ -1106,8 +1266,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         DropdownMenuItem(value: type, child: Text(type)))
                         .toList(),
                     onChanged: (val) {
-                      if (val != null)
-                        setDialogState(() => selectedLeaveType = val);
+                      if (val != null) {
+                        try {
+                          setDialogState(() => selectedLeaveType = val);
+                        } catch (_) {}
+                      }
                     },
                   ),
                   const SizedBox(height: 12),
@@ -1135,12 +1298,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         final picked = await showDateRangePicker(
                           context: context,
                           firstDate: DateTime.now(),
-                          lastDate:
-                          DateTime.now().add(const Duration(days: 90)),
+                          lastDate: DateTime.now().add(const Duration(days: 90)),
                         );
-                        if (picked != null)
-                          setDialogState(
-                                  () => _selectedLeaveDateRange = picked);
+                        if (picked != null && context.mounted) {
+                          WidgetsBinding.instance.addPostFrameCallback((_) {
+                            if (context.mounted) {
+                              try {
+                                setDialogState(() => _selectedLeaveDateRange = picked);
+                              } catch (_) {}
+                            }
+                          });
+                        }
                       },
                     ),
                   ),
@@ -1233,7 +1401,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               color: _AdminPalette.primaryBrown),
                           onPressed: () async {
                             await _fetchLeaveHistory();
-                            setModalState(() {});
                           },
                           tooltip: "Refresh",
                         ),
@@ -1265,10 +1432,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     itemBuilder: (ctx, idx) {
                       final item = leaveHistory[idx];
                       Color statusColor = Colors.orange;
-                      if (item['status'] == 'Approved')
-                        statusColor = Colors.green;
-                      if (item['status'] == 'Rejected')
-                        statusColor = Colors.red;
+                      if (item['status'] == 'Approved') statusColor = Colors.green;
+                      if (item['status'] == 'Rejected') statusColor = Colors.red;
 
                       return Card(
                         color: _AdminPalette.cardBg,
@@ -1292,11 +1457,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                   ? Icons.beach_access
                                   : item['leave_type'] == 'Sick Leave'
                                   ? Icons.medication
-                                  : item['leave_type'] ==
-                                  'Maternity Leave'
+                                  : item['leave_type'] == 'Maternity Leave'
                                   ? Icons.family_restroom
-                                  : item['leave_type'] ==
-                                  'Paternity Leave'
+                                  : item['leave_type'] == 'Paternity Leave'
                                   ? Icons.people
                                   : Icons.calendar_today,
                               color: statusColor,
@@ -1356,25 +1519,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceAround,
                       children: [
-                        _buildLeaveStatSalesman("Total", leaveHistory.length,
-                            Colors.grey),
+                        _buildLeaveStatSalesman("Total", leaveHistory.length, Colors.grey),
                         _buildLeaveStatSalesman(
                             "Pending",
-                            leaveHistory
-                                .where((l) => l['status'] == 'Pending')
-                                .length,
+                            leaveHistory.where((l) => l['status'] == 'Pending').length,
                             Colors.orange),
                         _buildLeaveStatSalesman(
                             "Approved",
-                            leaveHistory
-                                .where((l) => l['status'] == 'Approved')
-                                .length,
+                            leaveHistory.where((l) => l['status'] == 'Approved').length,
                             Colors.green),
                         _buildLeaveStatSalesman(
                             "Rejected",
-                            leaveHistory
-                                .where((l) => l['status'] == 'Rejected')
-                                .length,
+                            leaveHistory.where((l) => l['status'] == 'Rejected').length,
                             Colors.red),
                       ],
                     ),
@@ -1392,181 +1548,113 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget _buildLeaveStatSalesman(String label, int count, Color color) {
     return Column(
       children: [
-        Text(
-          count.toString(),
-          style: TextStyle(
-              fontWeight: FontWeight.bold, fontSize: 14, color: color),
-        ),
-        Text(
-          label,
-          style: const TextStyle(fontSize: 10, color: Colors.grey),
-        ),
+        Text(count.toString(),
+            style: TextStyle(
+                fontWeight: FontWeight.bold, fontSize: 14, color: color)),
+        Text(label, style: const TextStyle(fontSize: 10, color: Colors.grey)),
       ],
     );
   }
 
-  // ============================================================
-  // WHATSAPP ORDER
-  // ============================================================
-  Future<void> _sendWhatsAppOrderAndSave() async {
-    if (!_firmVerified) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          backgroundColor: Colors.orange,
-          content: Text("Please verify the firm first."),
-        ),
-      );
-      return;
-    }
-
-    if (_taskFormKey.currentState?.validate() != true) return;
-
-    final firmName = _firmNameController.text;
-    final mobile = _mobileController.text;
-    final pinCode = _pinCodeController.text;
-    final productName = selectedProductName ?? '';
-    final qty = _qtyController.text;
-    final total = calculatedTotal.toStringAsFixed(2);
-
-    final message = """
-*New Order Request*
-━━━━━━━━━━━━━━━━━━
-*Firm:* $firmName
-*Mobile:* $mobile
-*PIN Code:* $pinCode
-*Item Name:* $productName
-*Quantity:* $qty
-*Total Amount:* ₹$total
-*Location Address:* $currentLiveAddress
-━━━━━━━━━━━━━━━━━━
-*Sales Representative:* $userName ($userId)
-*Timestamp:* ${DateFormat('dd-MM-yyyy HH:mm:ss').format(DateTime.now())}
-  """;
-
-    final encodedMessage = Uri.encodeFull(message);
-    final waUrl = Uri.parse("https://wa.me/919512312400?text=$encodedMessage");
-
-    try {
-      await _submitDailyReportApi();
-      final bool launched =
-      await launchUrl(waUrl, mode: LaunchMode.externalApplication);
-      if (!launched && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-              content: Text("Unable to launch WhatsApp application.")),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Execution Error: $e")),
-        );
-      }
-    }
-  }
-
-  // ============================================================
-  // DAILY REPORTS
-  // ============================================================
+  // ═══════════════════════════════════════════════════
+  // FIRM CHECK & ORDER
+  // ═══════════════════════════════════════════════════
   Future<bool> _checkFirmExists(String firmName) async {
-    final mobile = _mobileController.text.trim();
-    final pinCode = _pinCodeController.text.trim();
+    if (firmName.trim().isEmpty) return false;
+    if (_isDisposed || !mounted) return false;
 
-    if (firmName.isEmpty || mobile.isEmpty || pinCode.isEmpty) return false;
-
+    _safeSetState(() => _isCheckingFirm = true);
     try {
       final uri = Uri.parse(
         "${API_BASE_URL}manage_daily_reports.php"
             "?action=verify"
-            "&emp_id=$userId"
-            "&firm_name=${Uri.encodeComponent(firmName)}"
-            "&mobile=${Uri.encodeComponent(mobile)}"
-            "&pin_code=${Uri.encodeComponent(pinCode)}",
+            "&emp_id=${Uri.encodeComponent(userId)}"
+            "&firm_name=${Uri.encodeComponent(firmName.trim())}",
       );
-
       final response = await http.get(uri);
+      if (_isDisposed || !mounted) return false;
+
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         return data['exists'] == true;
       }
     } catch (e) {
-      debugPrint("Verify Firm Error: $e");
+      debugPrint("Check Firm Error: $e");
+    } finally {
+      _safeSetState(() => _isCheckingFirm = false);
     }
     return false;
   }
 
-  Future<void> _submitDailyReportApi() async {
-    if (!_firmVerified) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            backgroundColor: Colors.orange,
-            content: Text("Verify the firm before saving."),
-          ),
-        );
-      }
-      return;
-    }
-
+  Future<void> _handleSendOrderAndWhatsApp() async {
     final firmName = _firmNameController.text.trim();
-
     final List<String> firmsToSubmit = _selectedFirmsMulti.isNotEmpty
         ? _selectedFirmsMulti.toList()
         : (firmName.isNotEmpty ? [firmName] : []);
 
     if (firmsToSubmit.isEmpty) {
-      if (mounted) {
+      if (mounted && !_isDisposed) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            backgroundColor: Colors.red,
-            content: Text("Please enter firm name"),
+            backgroundColor: Colors.orange,
+            content: Text("Please select or enter a firm name."),
           ),
         );
       }
       return;
     }
 
+    if (_selectedFirmsMulti.isEmpty && firmName.isNotEmpty) {
+      final bool exists = await _checkFirmExists(firmName);
+      if (!mounted || _isDisposed) return;
+
+      if (!exists) {
+        if (_mobileController.text.trim().isEmpty ||
+            _pinCodeController.text.trim().isEmpty ||
+            _addressController.text.trim().isEmpty) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              backgroundColor: Colors.orange,
+              content: Text(
+                  "New firm detected! Please enter Mobile, PIN Code, and Address."),
+            ),
+          );
+          return;
+        }
+      }
+    }
+
+    if (_taskFormKey.currentState?.validate() != true) return;
+
     int successCount = 0;
-    int skippedCount = 0;
     String lastMessage = '';
     String? lastError;
 
     for (final singleFirm in firmsToSubmit) {
       try {
-        final alreadyExists = await _checkFirmExists(singleFirm);
-        if (alreadyExists) {
-          skippedCount++;
-          _registeredFirms.add(singleFirm);
-          _firmLocked[singleFirm] = true;
-          continue;
-        }
-
         final response = await http.post(
           Uri.parse("${API_BASE_URL}manage_daily_reports.php"),
           body: {
             'emp_id': userId,
             'firm_name': singleFirm,
-            'mobile': _mobileController.text,
-            'pin_code': _pinCodeController.text,
+            'mobile': _mobileController.text.trim(),
+            'pin_code': _pinCodeController.text.trim(),
+            'address': _addressController.text.trim(),
             'category': selectedCategory ?? '',
             'product_name': selectedProductName ?? '',
             'price': selectedProductPrice.toString(),
             'quantity': _qtyController.text,
             'total_amount': calculatedTotal.toString(),
-            'latitude': (currentLatitude ?? 0.0).toString(),
-            'longitude': (currentLongitude ?? 0.0).toString(),
-            'address': currentLiveAddress ?? '',
           },
         );
+        if (_isDisposed || !mounted) return;
 
         if (response.statusCode == 200) {
           final data = json.decode(response.body);
           if (data['status'] == true || data['status'] == 'success') {
             successCount++;
-            lastMessage =
-                data['message'] ?? 'Order successfully logged in Database!';
+            lastMessage = data['message'] ?? 'Order successfully logged!';
             _registeredFirms.add(singleFirm);
-            _firmLocked[singleFirm] = true;
           } else {
             lastError = data['message'] ?? 'Failed to save order';
           }
@@ -1574,145 +1662,83 @@ class _DashboardScreenState extends State<DashboardScreen> {
           lastError = 'Server error: ${response.statusCode}';
         }
       } catch (e) {
-        lastError = "Daily Report Order Error: $e";
+        lastError = "Order Submission Error: $e";
       }
     }
 
-    if (successCount > 0 || skippedCount > 0) {
-      _fetchDailyReports();
+    if (!mounted || _isDisposed) return;
+
+    if (successCount > 0) {
+      await _fetchDailyReports();
+
+      final String mobile = _mobileController.text.trim();
+      final String pinCode = _pinCodeController.text.trim();
+      final String address = _addressController.text.trim();
+      final String productName = selectedProductName ?? '';
+      final String qty = _qtyController.text;
+      final String total = calculatedTotal.toStringAsFixed(2);
+      final String targetFirm = firmsToSubmit.join(', ');
 
       _firmNameController.clear();
       _mobileController.clear();
       _pinCodeController.clear();
+      _addressController.clear();
       _qtyController.text = '1';
 
-      setState(() {
-        _selectedFirm = null;
+      _safeSetState(() {
         _isAddingNewFirm = false;
         _showFirmDropdown = false;
         _selectedFirmsMulti.clear();
-        _isCurrentFirmLocked = false;
-        _firmVerified = false;
-        _verifiedFirmName = null;
-        _lastVerifiedSignature = null;
+        _isFirmExisting = false;
       });
 
-      if (!mounted) return;
-
-      final bool isPartial = successCount < firmsToSubmit.length;
-      final String message = skippedCount > 0 && successCount == 0
-          ? "$skippedCount firm(s) already registered — skipped."
-          : isPartial
-          ? "$successCount of ${firmsToSubmit.length} orders saved. ${lastError ?? ''}"
-          : (firmsToSubmit.length > 1
-          ? "$successCount orders successfully logged!"
-          : (lastMessage.isNotEmpty
-          ? lastMessage
-          : "Order successfully logged in Database!"));
-
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          backgroundColor: isPartial ? Colors.orange : Colors.green,
-          content: Text(message),
+          backgroundColor: Colors.green,
+          content: Text(lastMessage.isNotEmpty
+              ? lastMessage
+              : "Order submitted & redirecting to WhatsApp!"),
         ),
       );
-    } else {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          backgroundColor: Colors.red,
-          content: Text(lastError ?? 'Failed to save order'),
-        ),
-      );
-    }
-  }
 
-  // ============================================================
-// VERIFY FIRM — checks firm_name + mobile + pin_code against
-// the REGISTERED users in manage_salesman.php (users table).
-// Only if a matching user exists does the product section unlock.
-// ============================================================
-  // ============================================================
-// VERIFY FIRM — checks name + mobile + pin_code in users table
-// (manage_salesman.php)
-// ============================================================
-  Future<void> _verifyFirmFromDatabase() async {
-    final firmName = _firmNameController.text.trim();
-    final mobile = _mobileController.text.trim();
-    final pinCode = _pinCodeController.text.trim();
+      final message = """
+*New Order Request*
+━━━━━━━━━━━━━━━━━━
+*Firm:* $targetFirm
+*Mobile:* $mobile
+*PIN Code:* $pinCode
+*Firm Address:* $address
+*Item Name:* $productName
+*Quantity:* $qty
+*Total Amount:* ₹$total
+━━━━━━━━━━━━━━━━━━
+*Sales Representative:* $userName ($userId)
+*Timestamp:* ${DateFormat('dd-MM-yyyy HH:mm:ss').format(DateTime.now())}
+""";
 
-    setState(() {
-      _firmVerifyError = null;
-      _firmVerified = false;
-      _verifiedFirmName = null;
-    });
+      final encodedMessage = Uri.encodeFull(message);
+      final waUrl = Uri.parse("https://wa.me/919512312400?text=$encodedMessage");
 
-    if (firmName.isEmpty) {
-      setState(() => _firmVerifyError = "Please select or enter a firm name.");
-      return;
-    }
-    if (mobile.length < 10) {
-      setState(() => _firmVerifyError = "Please enter a valid 10-digit mobile.");
-      return;
-    }
-    if (pinCode.length < 6) {
-      setState(() => _firmVerifyError = "Please enter a valid 6-digit PIN code.");
-      return;
-    }
-
-    final signature = "$firmName|$mobile|$pinCode";
-    if (_lastVerifiedSignature == signature && _firmVerified) return;
-
-    setState(() => _isVerifyingFirm = true);
-
-    try {
-      // ✅ Now hits manage_salesman.php
-      final uri = Uri.parse(
-        "${API_BASE_URL}manage_salesman.php"
-            "?action=verify_firm"
-            "&firm_name=${Uri.encodeComponent(firmName)}"
-            "&mobile=${Uri.encodeComponent(mobile)}"
-            "&pin_code=${Uri.encodeComponent(pinCode)}",
-      );
-
-      final response = await http.get(uri);
-      if (!mounted) return;
-
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        final bool exists = data['exists'] == true;
-
-        setState(() {
-          _firmVerified = exists;
-          _verifiedFirmName = exists ? firmName : null;
-          _firmVerifyError = exists
-              ? null
-              : "No matching firm found in records. Please check firm name, mobile & PIN code.";
-          if (exists) {
-            _lastVerifiedSignature = signature;
-            _registeredFirms = {firmName}; // ✅ only show the verified firm
-            _firmLocked[firmName] = true;
-            _showFirmDropdown = false;
-          }
-        });
-
-        if (exists && mounted) {
+      try {
+        final bool launched =
+        await launchUrl(waUrl, mode: LaunchMode.externalApplication);
+        if (!launched && mounted && !_isDisposed) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              backgroundColor: Colors.green,
-              content: Text("✅ Firm '$firmName' verified successfully!"),
-            ),
+            const SnackBar(
+                content: Text("Unable to launch WhatsApp application.")),
           );
         }
-      } else {
-        setState(() => _firmVerifyError =
-        "Server error (${response.statusCode}). Please try again.");
+      } catch (e) {
+        if (mounted && !_isDisposed) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text("WhatsApp launch failed: $e")),
+          );
+        }
       }
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _firmVerifyError = "Verification failed: $e");
-    } finally {
-      if (mounted) setState(() => _isVerifyingFirm = false);
+    } else if (lastError != null && mounted && !_isDisposed) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(backgroundColor: Colors.red, content: Text(lastError)),
+      );
     }
   }
 
@@ -1721,20 +1747,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
       final response = await http.get(
         Uri.parse("${API_BASE_URL}manage_daily_reports.php?emp_id=$userId"),
       );
+      if (_isDisposed || !mounted) return;
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-
         if ((data['status'] == true || data['status'] == 'success') &&
             data['reports'] != null) {
-          if (!mounted) return;
-          setState(() {
+          if (!mounted || _isDisposed) return;
+          _safeSetState(() {
             dailyTaskHistory = List<Map<String, dynamic>>.from(
               (data['reports'] as List)
                   .map((item) => Map<String, dynamic>.from(item)),
             );
-
-            // ✅ Repopulate registered firms from daily_reports
             _registeredFirms.clear();
             for (var r in dailyTaskHistory) {
               final fn = r['firm_name']?.toString().trim();
@@ -1757,12 +1781,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (context, setDialogState) {
+          final Map<String, List<Map<String, dynamic>>> grouped = {};
+          for (final item in dailyTaskHistory) {
+            final firm = (item['firm_name']?.toString().trim().isNotEmpty ?? false)
+                ? item['firm_name'].toString().trim()
+                : 'Unnamed Firm';
+            grouped.putIfAbsent(firm, () => []).add(item);
+          }
+
           return Dialog(
             backgroundColor: _AdminPalette.cardBg,
-            shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-            insetPadding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
             child: Padding(
               padding: const EdgeInsets.all(20.0),
               child: Column(
@@ -1772,11 +1802,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Text("Daily Orders Logged",
-                          style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                              color: _AdminPalette.inkDark)),
+                      const Text(
+                        "Daily Orders Logged",
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: _AdminPalette.inkDark,
+                        ),
+                      ),
                       Row(
                         children: [
                           IconButton(
@@ -1784,7 +1817,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                 color: _AdminPalette.primaryBrown),
                             onPressed: () async {
                               await _fetchDailyReports();
-                              setDialogState(() {});
                             },
                             tooltip: "Refresh",
                           ),
@@ -1816,96 +1848,160 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     Flexible(
                       child: ConstrainedBox(
                         constraints: BoxConstraints(
-                          maxHeight:
-                          MediaQuery.of(context).size.height * 0.55,
+                          maxHeight: MediaQuery.of(context).size.height * 0.55,
                         ),
-                        child: ListView.separated(
+                        child: ListView.builder(
                           shrinkWrap: true,
-                          itemCount: dailyTaskHistory.length,
-                          separatorBuilder: (_, __) => const Divider(),
-                          itemBuilder: (ctx, idx) {
-                            final item = dailyTaskHistory[idx];
-                            return ListTile(
-                              contentPadding: EdgeInsets.zero,
-                              leading: Container(
-                                padding: const EdgeInsets.all(8),
-                                decoration: BoxDecoration(
-                                  color: Colors.green.shade50,
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                                child: const Icon(Icons.receipt_long,
-                                    color: Colors.green, size: 20),
+                          itemCount: grouped.length,
+                          itemBuilder: (ctx, groupIdx) {
+                            final firmName = grouped.keys.elementAt(groupIdx);
+                            final firmOrders = grouped[firmName]!;
+
+                            double firmTotal = 0.0;
+                            for (final o in firmOrders) {
+                              firmTotal += double.tryParse(
+                                  o['total_amount']?.toString() ?? '0') ??
+                                  0.0;
+                            }
+
+                            return Container(
+                              margin: const EdgeInsets.symmetric(vertical: 8),
+                              decoration: BoxDecoration(
+                                color: _AdminPalette.bgWarm,
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(color: _AdminPalette.border),
                               ),
-                              title: Text(item['firm_name'] ?? '',
-                                  style: const TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 14)),
-                              subtitle: Column(
-                                crossAxisAlignment:
-                                CrossAxisAlignment.start,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  const SizedBox(height: 4),
-                                  Text(
-                                      "📦 ${item['category'] ?? ''} • ${item['product_name'] ?? ''}",
-                                      style:
-                                      const TextStyle(fontSize: 12)),
-                                  Text(
-                                      "Qty: ${item['quantity']} × ₹${item['price']}",
-                                      style:
-                                      const TextStyle(fontSize: 11)),
-                                  Text("📍 ${item['address'] ?? 'N/A'}",
-                                      style: const TextStyle(
-                                          fontSize: 10,
-                                          color: Colors.grey)),
-                                  Text("🕐 ${item['created_at'] ?? ''}",
-                                      style: const TextStyle(
-                                          fontSize: 10,
-                                          color: Colors.grey)),
+                                  Container(
+                                    padding: const EdgeInsets.all(12),
+                                    decoration: const BoxDecoration(
+                                      color: _AdminPalette.cardHeaderBg,
+                                      borderRadius: BorderRadius.vertical(
+                                          top: Radius.circular(14)),
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        const Icon(Icons.store,
+                                            color: _AdminPalette.primaryBrown,
+                                            size: 20),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                firmName,
+                                                style: const TextStyle(
+                                                  fontSize: 14,
+                                                  fontWeight: FontWeight.bold,
+                                                  color: _AdminPalette.inkDark,
+                                                ),
+                                              ),
+                                              Text(
+                                                "${firmOrders.length} order${firmOrders.length == 1 ? '' : 's'} • ₹${firmTotal.toStringAsFixed(0)}",
+                                                style: const TextStyle(
+                                                    fontSize: 11,
+                                                    color: Colors.grey),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 10, vertical: 4),
+                                          decoration: BoxDecoration(
+                                            color: Colors.green.shade50,
+                                            borderRadius:
+                                            BorderRadius.circular(8),
+                                            border: Border.all(
+                                                color: Colors.green),
+                                          ),
+                                          child: Text(
+                                            "₹${firmTotal.toStringAsFixed(0)}",
+                                            style: const TextStyle(
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 12,
+                                              color: Colors.green,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  ...firmOrders.map((item) {
+                                    return Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 12, vertical: 8),
+                                      decoration: const BoxDecoration(
+                                        border: Border(
+                                          bottom: BorderSide(
+                                              color: _AdminPalette.border,
+                                              width: 0.5),
+                                        ),
+                                      ),
+                                      child: Row(
+                                        crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                        children: [
+                                          const Icon(Icons.receipt_long,
+                                              color: Colors.green, size: 18),
+                                          const SizedBox(width: 8),
+                                          Expanded(
+                                            child: Column(
+                                              crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  "📦 ${item['category'] ?? ''} • ${item['product_name'] ?? ''}",
+                                                  style: const TextStyle(
+                                                      fontSize: 12,
+                                                      fontWeight:
+                                                      FontWeight.w500),
+                                                ),
+                                                Text(
+                                                  "Qty: ${item['quantity'] ?? '0'} × ₹${item['price'] ?? '0'}",
+                                                  style: const TextStyle(
+                                                      fontSize: 11,
+                                                      color: Colors.grey),
+                                                ),
+                                                Text(
+                                                  "📞 ${item['mobile'] ?? 'N/A'}",
+                                                  style: const TextStyle(
+                                                      fontSize: 10,
+                                                      color: Colors.grey),
+                                                ),
+                                                Text(
+                                                  "🕐 ${item['created_at'] ?? ''}",
+                                                  style: const TextStyle(
+                                                      fontSize: 10,
+                                                      color: Colors.grey),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Text(
+                                            "₹${item['total_amount'] ?? '0'}",
+                                            style: const TextStyle(
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.green,
+                                              fontSize: 13,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                  }).toList(),
                                 ],
-                              ),
-                              trailing: Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 10, vertical: 6),
-                                decoration: BoxDecoration(
-                                  color: Colors.green.shade50,
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: Text("₹${item['total_amount']}",
-                                    style: const TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.green,
-                                        fontSize: 14)),
                               ),
                             );
                           },
                         ),
                       ),
                     ),
-                  if (dailyTaskHistory.isNotEmpty) ...[
-                    const SizedBox(height: 10),
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: _AdminPalette.cardHeaderBg,
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text("Total Orders:",
-                              style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 14)),
-                          Text("${dailyTaskHistory.length}",
-                              style: const TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 14,
-                                  color: Colors.green)),
-                        ],
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: 10),
                 ],
               ),
             ),
@@ -1915,43 +2011,65 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // ============================================================
-  // GEOLOCATOR GPS TRACKING & AUTO PUNCH OUT
-  // ============================================================
+  // ═══════════════════════════════════════════════════
+  // GPS TIMERS
+  // ═══════════════════════════════════════════════════
   void _start1MinLocationTimer() {
     _minuteLocationTimer?.cancel();
     _minuteLocationTimer = Timer.periodic(const Duration(minutes: 1), (_) async {
-      // 1. Get fresh GPS + address
+      if (_isDisposed || !mounted) return;
       await _fetchAndUpdateCurrentLocation();
-
-      // 2. ✅ Push live location to server (so other roles can see it)
-      await _pushLiveLocationToServer();
-
-      // 3. Refresh hierarchy (so we see others' updated locations)
+      if (_isDisposed || !mounted) return;
       await _refreshHierarchyLiveLocations();
-
-      // 4. Check auto punch-out
+      if (_isDisposed || !mounted) return;
       _checkAutoPunchOut();
     });
   }
 
-  Future<void> _checkAutoPunchOut() async {
+  bool get isAutoPunchOutDue {
     final now = DateTime.now();
-    if (isCheckedIn && now.hour >= 18) {
-      File dummyFile = capturedImageFile ?? File('');
-      await _submitPunchApi(dummyFile, 'PUNCH_OUT', isAuto: true);
+    if (!isCheckedIn) return false;
+    if (now.weekday == DateTime.sunday) return false;
+    if (lastPunchType == 'PUNCH_OUT') return false;
+    return now.hour >= 18;
+  }
+
+  Future<void> _checkAutoPunchOut() async {
+    if (_isDisposed || !mounted) return;
+    if (!isAutoPunchOutDue) return;
+
+    debugPrint("🔄 Auto punch-out triggered at ${DateTime.now()}");
+    await _submitPunchApi(null, 'PUNCH_OUT', isAuto: true);
+    await _fetchAttendanceStatus();
+  }
+
+  String getPunchInStatusMessage() {
+    final now = DateTime.now();
+    if (now.weekday == DateTime.sunday) {
+      return "⛔ Sunday — Punch In not allowed";
     }
+    final minutes = now.hour * 60 + now.minute;
+    const endTime = 18 * 60;
+    if (minutes >= endTime) {
+      return "⏰ Punch In closed for today (after 6:00 PM)";
+    }
+    final remaining = endTime - minutes;
+    return "✅ Punch In available (closes in ${remaining ~/ 60}h ${remaining % 60}m)";
   }
 
   Future<void> _fetchAndUpdateCurrentLocation() async {
-    try {
-      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) return;
+    if (_isDisposed || !mounted) return;
 
-      LocationPermission permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied ||
-          permission == LocationPermission.deniedForever) {
-        return;
+    try {
+      if (!kIsWeb) {
+        bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+        if (!serviceEnabled) return;
+
+        LocationPermission permission = await Geolocator.checkPermission();
+        if (permission == LocationPermission.denied ||
+            permission == LocationPermission.deniedForever) {
+          return;
+        }
       }
 
       Position pos = await Geolocator.getCurrentPosition(
@@ -1965,27 +2083,30 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _initLiveGpsTracking() async {
-    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-    if (!serviceEnabled) {
-      if (!mounted) return;
-      setState(() {
-        currentLiveAddress = "GPS location disabled";
-        isGpsEnabled = false;
-      });
-      return;
+    if (_isDisposed || !mounted) return;
+
+    if (!kIsWeb) {
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        _safeSetState(() {
+          currentLiveAddress = "GPS location disabled";
+          isGpsEnabled = false;
+        });
+        return;
+      }
     }
 
-    if (mounted) setState(() => isGpsEnabled = true);
+    _safeSetState(() => isGpsEnabled = true);
 
-    PermissionStatus permStatus = await Permission.locationWhenInUse.status;
-    if (permStatus.isDenied) {
-      permStatus = await Permission.locationWhenInUse.request();
-    }
-
-    if (!permStatus.isGranted) {
-      if (!mounted) return;
-      setState(() => currentLiveAddress = "Location permission denied");
-      return;
+    if (!kIsWeb) {
+      PermissionStatus permStatus = await Permission.locationWhenInUse.status;
+      if (permStatus.isDenied) {
+        permStatus = await Permission.locationWhenInUse.request();
+      }
+      if (!permStatus.isGranted) {
+        _safeSetState(() => currentLiveAddress = "Location permission denied");
+        return;
+      }
     }
 
     try {
@@ -1995,9 +2116,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
       );
       await _updateAddressFromPosition(initialPosition);
     } catch (e) {
-      if (mounted) {
-        setState(() => currentLiveAddress = "Unable to fetch GPS position.");
-      }
+      _safeSetState(
+              () => currentLiveAddress = "Unable to fetch GPS position.");
     }
 
     await _positionStreamSub?.cancel();
@@ -2006,34 +2126,39 @@ class _DashboardScreenState extends State<DashboardScreen> {
         accuracy: LocationAccuracy.high,
         distanceFilter: 5,
       ),
-    ).listen((Position position) => _updateAddressFromPosition(position));
+    ).listen((Position position) {
+      if (!_isDisposed && mounted) {
+        _updateAddressFromPosition(position);
+      }
+    });
   }
 
   Future<void> _updateAddressFromPosition(Position position) async {
-    // ── Geocode lat/long → human-readable address ──
-    String resolvedAddress = currentLiveAddress ?? 'Fetching address...';
+    if (_isDisposed || !mounted) return;
 
+    String resolvedAddress = currentLiveAddress ?? 'Fetching address...';
     try {
       final List<Placemark> placemarks = await placemarkFromCoordinates(
         position.latitude,
         position.longitude,
       );
+      if (_isDisposed || !mounted) return;
 
       if (placemarks.isNotEmpty) {
         final Placemark p = placemarks.first;
-
-        // Build a proper multi-part address (street, locality, city, state, pincode)
         final List<String> parts = [];
 
-        // Street / building (most specific)
         final street = [
           p.name,
           p.street,
           p.subLocality,
-        ].where((s) => s != null && s.trim().isNotEmpty).map((s) => s!.trim()).toSet().toList();
+        ]
+            .where((s) => s != null && s.trim().isNotEmpty)
+            .map((s) => s!.trim())
+            .toSet()
+            .toList();
         if (street.isNotEmpty) parts.add(street.join(', '));
 
-        // Locality / area
         if (p.locality != null && p.locality!.trim().isNotEmpty) {
           parts.add(p.locality!.trim());
         }
@@ -2041,19 +2166,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
             p.subAdministrativeArea!.trim().isNotEmpty) {
           parts.add(p.subAdministrativeArea!.trim());
         }
-
-        // City
         if (p.administrativeArea != null &&
             p.administrativeArea!.trim().isNotEmpty) {
           parts.add(p.administrativeArea!.trim());
         }
-
-        // Postal code
         if (p.postalCode != null && p.postalCode!.trim().isNotEmpty) {
           parts.add(p.postalCode!.trim());
         }
-
-        // Country
         if (p.country != null && p.country!.trim().isNotEmpty) {
           parts.add(p.country!.trim());
         }
@@ -2064,29 +2183,31 @@ class _DashboardScreenState extends State<DashboardScreen> {
       }
     } catch (e) {
       debugPrint("Geocoding error: $e");
-      // Fallback: keep a coordinate-based string so users still see something useful
-      resolvedAddress = "Lat: ${position.latitude.toStringAsFixed(5)}, "
-          "Long: ${position.longitude.toStringAsFixed(5)}";
+      resolvedAddress =
+      "Lat: ${position.latitude.toStringAsFixed(5)}, Long: ${position.longitude.toStringAsFixed(5)}";
     }
 
-    if (!mounted) return;
+    if (!mounted || _isDisposed) return;
 
-    setState(() {
+    _safeSetState(() {
       currentLatitude = position.latitude;
       currentLongitude = position.longitude;
-      currentLiveAddress = resolvedAddress;   // ✅ FIXED: actually assign
+      currentLiveAddress = resolvedAddress;
       isGpsEnabled = true;
     });
-
-    // ✅ Push immediately on GPS lock / movement so other dashboards
-    //    (Sales Officer, ASM, RSM, ZSM, Sales Head) see the proper address
-    _pushLiveLocationToServer();
   }
 
-  // ============================================================
-  // FACE DETECTION & SELFIE PUNCH
-  // ============================================================
-  Future<Map<String, dynamic>> _analyzeFace(File imageFile) async {
+  // ═══════════════════════════════════════════════════
+  // FACE + SELFIE PUNCH (WEB-SAFE)
+  // ═══════════════════════════════════════════════════
+  Future<Map<String, dynamic>> _analyzeFace(XFile imageFile) async {
+    if (kIsWeb) {
+      return {
+        'faces': [],
+        'message': 'Face detection not available on web'
+      };
+    }
+
     try {
       if (_faceDetector == null || !_faceDetectorInitialized) {
         await _initFaceDetector();
@@ -2095,7 +2216,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         return {'faces': [], 'message': 'Face detector unavailable'};
       }
 
-      final inputImage = InputImage.fromFile(imageFile);
+      final inputImage = InputImage.fromFilePath(imageFile.path);
       final List<Face> faces = await _faceDetector!.processImage(inputImage);
 
       if (faces.isEmpty) {
@@ -2103,16 +2224,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
       }
 
       final face = faces.first;
-      Map<String, dynamic> faceFeatures = {
-        'hasSmile': (face.smilingProbability ?? 0.0) > 0.5,
-        'smileProbability': face.smilingProbability ?? 0.0,
-        'leftEyeOpen': face.leftEyeOpenProbability ?? 0.0,
-        'rightEyeOpen': face.rightEyeOpenProbability ?? 0.0,
-      };
-
       return {
         'faces': faces,
-        'features': faceFeatures,
+        'features': {
+          'hasSmile': (face.smilingProbability ?? 0.0) > 0.5,
+        },
         'message': 'Face verified!'
       };
     } catch (e) {
@@ -2122,96 +2238,111 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _triggerSelfiePunch() async {
-    if (isCheckedIn && !isPunchOutAllowed) {
-      if (!mounted) return;
+    if (_isDisposed || !mounted) return;
+
+    if (isCheckedIn) {
+      if (!mounted || _isDisposed) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
+        const SnackBar(
           backgroundColor: Colors.orange,
-          content: Text(
-              "Punch Out allowed between 9:00 AM and 6:00 PM!\n${getPunchOutStatus()}"),
-          duration: const Duration(seconds: 4),
+          content:
+          Text("You are already checked in.\nAuto punch-out at 6:00 PM."),
+          duration: Duration(seconds: 3),
         ),
       );
       return;
     }
 
-    if (isCheckedIn && lastPunchType == 'PUNCH_OUT') {
-      if (!mounted) return;
+    if (lastPunchType == 'PUNCH_OUT') {
+      if (!mounted || _isDisposed) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           backgroundColor: Colors.orange,
-          content: Text("You have already checked out today!"),
+          content: Text("You have already punched out today!"),
+          duration: Duration(seconds: 3),
+        ),
+      );
+      return;
+    }
+
+    if (!isPunchInAllowed) {
+      if (!mounted || _isDisposed) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: Colors.red,
+          content: Text(
+            DateTime.now().weekday == DateTime.sunday
+                ? "Punch In not allowed on Sunday."
+                : "Punch In closed for today (after 6:00 PM).",
+          ),
+          duration: const Duration(seconds: 3),
         ),
       );
       return;
     }
 
     try {
-      PermissionStatus cameraStatus = await Permission.camera.status;
-      if (cameraStatus.isDenied) {
-        cameraStatus = await Permission.camera.request();
-      }
-
-      if (!cameraStatus.isGranted) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-              backgroundColor: Colors.red,
-              content: Text("Camera permission required.")),
-        );
-        return;
+      if (!kIsWeb) {
+        PermissionStatus cameraStatus = await Permission.camera.status;
+        if (cameraStatus.isDenied) {
+          cameraStatus = await Permission.camera.request();
+        }
+        if (!cameraStatus.isGranted) {
+          if (!mounted || _isDisposed) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+                backgroundColor: Colors.red,
+                content: Text("Camera permission required.")),
+          );
+          return;
+        }
       }
 
       final XFile? photo = await _picker.pickImage(
-        source: ImageSource.camera,
+        source: kIsWeb ? ImageSource.gallery : ImageSource.camera,
         preferredCameraDevice: CameraDevice.front,
         imageQuality: 80,
       );
 
       if (photo == null) return;
+      if (_isDisposed || !mounted) return;
 
-      File imageFile = File(photo.path);
-      if (!await imageFile.exists()) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-              backgroundColor: Colors.red,
-              content: Text("Captured image not found.")),
-        );
-        return;
-      }
-
-      if (!mounted) return;
-
+      BuildContext? loadingDialogContext;
       showDialog(
         context: context,
         barrierDismissible: false,
-        builder: (loadingCtx) => const Center(
-          child: CircularProgressIndicator(color: _AdminPalette.goldAccent),
-        ),
+        builder: (loadingCtx) {
+          loadingDialogContext = loadingCtx;
+          return const Center(
+            child: CircularProgressIndicator(color: _AdminPalette.goldAccent),
+          );
+        },
       );
 
-      final result = await _analyzeFace(imageFile);
+      final result = await _analyzeFace(photo);
 
-      if (mounted) {
-        Navigator.of(context, rootNavigator: true).pop();
+      if (loadingDialogContext != null && loadingDialogContext!.mounted) {
+        try {
+          Navigator.of(loadingDialogContext!).pop();
+        } catch (_) {}
       }
 
+      if (!mounted || _isDisposed) return;
+
       if (result['faces'] == null || (result['faces'] as List).isEmpty) {
-        if (!mounted) return;
         showDialog(
           context: context,
           builder: (dialogCtx) => AlertDialog(
             backgroundColor: _AdminPalette.cardBg,
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(20)),
+            shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
             title: const Row(
               children: [
                 Icon(Icons.warning_amber, color: Colors.orange),
                 SizedBox(width: 8),
                 Text("Face Not Detected",
-                    style: TextStyle(
-                        fontSize: 16, fontWeight: FontWeight.bold)),
+                    style:
+                    TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
               ],
             ),
             content: const Text(
@@ -2228,9 +2359,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ),
                 onPressed: () async {
                   Navigator.of(dialogCtx).pop();
-                  final nextPunchType =
-                  isCheckedIn ? 'PUNCH_OUT' : 'PUNCH_IN';
-                  await _submitPunchApi(imageFile, nextPunchType);
+                  await _submitPunchApi(photo, 'PUNCH_IN');
                 },
                 child: const Text("Proceed",
                     style: TextStyle(color: Colors.white)),
@@ -2243,7 +2372,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
       final bool hasSmile = result['features']?['hasSmile'] ?? false;
 
-      if (!mounted) return;
+      if (!mounted || _isDisposed) return;
       showDialog(
         context: context,
         builder: (dialogCtx) => AlertDialog(
@@ -2279,8 +2408,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     borderRadius: BorderRadius.circular(12),
                     child: AspectRatio(
                       aspectRatio: 16 / 9,
-                      child: Image.file(
-                        imageFile,
+                      child: kIsWeb
+                          ? FutureBuilder<Uint8List>(
+                        future: photo.readAsBytes(),
+                        builder: (context, snap) {
+                          if (!snap.hasData) {
+                            return const Center(
+                                child: CircularProgressIndicator());
+                          }
+                          return Image.memory(snap.data!,
+                              fit: BoxFit.cover);
+                        },
+                      )
+                          : Image.file(
+                        File(photo.path),
                         fit: BoxFit.cover,
                         errorBuilder: (_, __, ___) => Container(
                           color: Colors.grey.shade200,
@@ -2332,24 +2473,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
               onPressed: () async {
                 Navigator.of(dialogCtx).pop();
-                final nextPunchType = isCheckedIn ? 'PUNCH_OUT' : 'PUNCH_IN';
-                await _submitPunchApi(imageFile, nextPunchType);
+                await _submitPunchApi(photo, 'PUNCH_IN');
               },
-              child: Text(
-                isCheckedIn ? "Confirm Punch Out" : "Confirm Punch In",
-                style: const TextStyle(color: _AdminPalette.goldLight),
+              child: const Text(
+                "Confirm Punch In",
+                style: TextStyle(color: _AdminPalette.goldLight),
               ),
             ),
           ],
         ),
       );
     } catch (e) {
-      if (mounted) {
-        try {
-          Navigator.of(context, rootNavigator: true).pop();
-        } catch (_) {}
-      }
-      if (mounted) {
+      if (mounted && !_isDisposed) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text("Selfie Error: ${e.toString()}")),
         );
@@ -2357,9 +2492,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  // ============================================================
-  // COMPUTED PROPERTIES
-  // ============================================================
+  // ═══════════════════════════════════════════════════
+  // COMPUTED
+  // ═══════════════════════════════════════════════════
   double get calculatedTotal {
     int qty = int.tryParse(_qtyController.text) ?? 0;
     return selectedProductPrice * qty;
@@ -2373,10 +2508,79 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return total;
   }
 
+  Widget _buildCapturedPreview() {
+    if (capturedPhotoUrl != null && capturedPhotoUrl!.isNotEmpty) {
+      final String fullUrl = capturedPhotoUrl!.startsWith('http')
+          ? capturedPhotoUrl!
+          : '$API_BASE_URL$capturedPhotoUrl';
+      return Image.network(
+        fullUrl,
+        fit: BoxFit.cover,
+        loadingBuilder: (context, child, progress) {
+          if (progress == null) return child;
+          return const Center(child: CircularProgressIndicator(strokeWidth: 2));
+        },
+        errorBuilder: (_, __, ___) => Container(
+          color: Colors.grey.shade200,
+          child: const Icon(Icons.person, size: 50, color: Colors.grey),
+        ),
+      );
+    } else if (capturedImageBytes != null) {
+      return Image.memory(capturedImageBytes!, fit: BoxFit.cover);
+    } else if (!kIsWeb && capturedImageFile != null) {
+      return Image.file(capturedImageFile!, fit: BoxFit.cover);
+    }
+    return Container(
+      color: Colors.grey.shade200,
+      child: const Icon(Icons.person, size: 50, color: Colors.grey),
+    );
+  }
 
-  // ============================================================
-// ROLE-BASED LIVE LOCATION CARD (FULL ADDRESS DISPLAY)
-// ============================================================
+  Widget _buildTopSummaryCard() {
+    return Container(
+      margin: const EdgeInsets.only(top: 16),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(16),
+        border:
+        Border.all(color: _AdminPalette.goldAccent.withOpacity(0.3)),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceAround,
+        children: [
+          _buildSummaryItem("Monthly Orders", "${dailyTaskHistory.length}",
+              Icons.shopping_cart),
+          Container(width: 1, height: 35, color: Colors.white24),
+          _buildSummaryItem("Total Sales",
+              "₹${totalMonthlySales.toStringAsFixed(0)}", Icons.payments),
+          Container(width: 1, height: 35, color: Colors.white24),
+          _buildSummaryItem("Leaves Logged", "${leaveHistory.length}",
+              Icons.event_note),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSummaryItem(String label, String value, IconData icon) {
+    return Column(
+      children: [
+        Icon(icon, color: _AdminPalette.goldAccent, size: 20),
+        const SizedBox(height: 4),
+        Text(value,
+            style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+                fontSize: 14)),
+        Text(label,
+            style: const TextStyle(color: Colors.white70, fontSize: 10)),
+      ],
+    );
+  }
+
+  // ═══════════════════════════════════════════════════
+  // ROLE-BASED LIVE LOCATION CARD
+  // ═══════════════════════════════════════════════════
   Widget _buildRoleBasedLocationCard() {
     return Container(
       padding: const EdgeInsets.all(16),
@@ -2388,10 +2592,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // ── Header ──
           Row(
             children: [
-              const Icon(Icons.my_location, color: Colors.redAccent, size: 20),
+              const Icon(Icons.my_location,
+                  color: Colors.redAccent, size: 20),
               const SizedBox(width: 8),
               Expanded(
                 child: Column(
@@ -2407,7 +2611,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ),
                     Text(
                       "Role: $userRole • ${hierarchyList.length} User(s) Visible",
-                      style: const TextStyle(fontSize: 11, color: Colors.grey),
+                      style:
+                      const TextStyle(fontSize: 11, color: Colors.grey),
                     ),
                   ],
                 ),
@@ -2416,13 +2621,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 icon: const Icon(Icons.refresh,
                     size: 18, color: _AdminPalette.primaryBrown),
                 onPressed: () {
-                  setState(() => isLoadingHierarchy = true);
-                  fetchHierarchyAndRoutes();
+                  if (mounted && !_isDisposed) {
+                    _safeSetState(() => isLoadingHierarchy = true);
+                    fetchHierarchyAndRoutes();
+                  }
                 },
                 tooltip: "Refresh Hierarchy",
               ),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
                   color: isGpsEnabled
                       ? Colors.green.shade50
@@ -2446,8 +2654,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ],
           ),
           const SizedBox(height: 12),
-
-          // ── Logged-in user's own live location ──
           Container(
             width: double.infinity,
             padding: const EdgeInsets.all(10),
@@ -2486,8 +2692,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ],
             ),
           ),
-
-          // ── Team members list ──
           if (isLoadingHierarchy)
             const Padding(
               padding: EdgeInsets.all(20),
@@ -2513,7 +2717,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
               itemCount: hierarchyList.length,
               itemBuilder: (context, index) {
                 final item = hierarchyList[index];
-
                 final String empId = item['emp_id']?.toString() ??
                     item['employee_id']?.toString() ??
                     item['id']?.toString() ??
@@ -2523,38 +2726,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 final String route =
                     item['assigned_route']?.toString() ?? 'Not Assigned';
 
-                // ✅ Only read 'address' and 'live_address' from API.
-                //    'location' and 'city' have been removed because
-                //    manage_salesman.php does not reliably return them.
-                final String rawAddress =
-                    item['address']?.toString().trim() ?? '';
-                final String rawLive =
-                    item['live_address']?.toString().trim() ?? '';
-
                 final double? lat =
                 double.tryParse(item['latitude']?.toString() ?? '');
                 final double? lng =
                 double.tryParse(item['longitude']?.toString() ?? '');
 
-                // ── Resolve location with priority: address → live_address → coords
                 String liveLocation;
-                if (rawAddress.isNotEmpty &&
-                    !rawAddress.startsWith('Fetching') &&
-                    !rawAddress.startsWith('GPS') &&
-                    !rawAddress.startsWith('Location permission') &&
-                    !rawAddress.startsWith('Unable to fetch')) {
-                  liveLocation = rawAddress;
-                } else if (rawLive.isNotEmpty &&
-                    !rawLive.startsWith('Fetching') &&
-                    !rawLive.startsWith('GPS') &&
-                    !rawLive.startsWith('Location permission') &&
-                    !rawLive.startsWith('Unable to fetch')) {
-                  liveLocation = rawLive;
-                } else if (lat != null && lng != null) {
+                if (lat != null && lng != null && lat != 0.0 && lng != 0.0) {
                   liveLocation =
                   "Lat: ${lat.toStringAsFixed(5)}, Long: ${lng.toStringAsFixed(5)}";
                 } else {
-                  liveLocation = 'Location not available';
+                  liveLocation = currentLiveAddress ?? 'Location not available';
                 }
 
                 final String lastUpdated =
@@ -2564,7 +2746,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     item['is_live'] == true);
                 final bool isCurrentUser = (empId == userId);
 
-                // Skip showing self in the list (already shown above)
                 if (isCurrentUser) return const SizedBox.shrink();
 
                 return Card(
@@ -2580,7 +2761,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // ── Row 1: Avatar + Name + Live badge ──
                         Row(
                           children: [
                             CircleAvatar(
@@ -2617,7 +2797,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                     : Colors.grey.shade200,
                                 borderRadius: BorderRadius.circular(8),
                                 border: Border.all(
-                                  color: isLive ? Colors.green : Colors.grey,
+                                  color:
+                                  isLive ? Colors.green : Colors.grey,
                                 ),
                               ),
                               child: Text(
@@ -2634,8 +2815,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           ],
                         ),
                         const SizedBox(height: 6),
-
-                        // ── Row 2: Role ──
                         Row(
                           children: [
                             const Icon(Icons.badge,
@@ -2649,8 +2828,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           ],
                         ),
                         const SizedBox(height: 4),
-
-                        // ── Row 3: FULL Live Location ──
                         Row(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
@@ -2668,13 +2845,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           ],
                         ),
                         const SizedBox(height: 4),
-
-                        // ── Row 4: Route ──
                         Row(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             const Icon(Icons.route,
-                                size: 12, color: _AdminPalette.primaryBrown),
+                                size: 12,
+                                color: _AdminPalette.primaryBrown),
                             const SizedBox(width: 4),
                             Expanded(
                               child: Text(
@@ -2690,8 +2866,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             ),
                           ],
                         ),
-
-                        // ── Row 5: Last updated ──
                         if (lastUpdated.isNotEmpty) ...[
                           const SizedBox(height: 4),
                           Row(
@@ -2721,13 +2895,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // ============================================================
+  // ═══════════════════════════════════════════════════
   // BUILD
-  // ============================================================
-  @override
-// ============================================================
-// BUILD
-// ============================================================
+  // ═══════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -2736,7 +2906,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         child: SingleChildScrollView(
           child: Column(
             children: [
-              // ===================== HEADER =====================
+              // HEADER
               Container(
                 padding: const EdgeInsets.all(20),
                 decoration: const BoxDecoration(
@@ -2791,8 +2961,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       initialData: DateTime.now(),
                       builder: (context, snapshot) {
                         final now = snapshot.data ?? DateTime.now();
-                        final timeString =
-                        DateFormat('hh:mm:ss a').format(now);
+                        final timeString = DateFormat('hh:mm:ss a').format(now);
                         final dateString =
                         DateFormat('EEEE, dd MMMM yyyy').format(now);
 
@@ -2853,16 +3022,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ),
               ),
 
-              // ===================== BODY =====================
+              // BODY
               Padding(
                 padding: const EdgeInsets.all(16.0),
                 child: Column(
                   children: [
-                    // ── Live Hierarchy Card ──
                     _buildRoleBasedLocationCard(),
                     const SizedBox(height: 16),
 
-                    // ── Leave Management Card ──
+                    // LEAVE CARD
                     Container(
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
@@ -2871,36 +3039,60 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         border: Border.all(color: _AdminPalette.border),
                       ),
                       child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        crossAxisAlignment: CrossAxisAlignment.center,
                         children: [
-                          const Text("Leave Management",
+                          const Expanded(
+                            child: Text(
+                              "Leave Management",
                               style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 15,
-                                  color: _AdminPalette.inkDark)),
-                          Row(
-                            children: [
-                              IconButton(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 15,
+                                color: _AdminPalette.inkDark,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Flexible(
+                            child: Wrap(
+                              alignment: WrapAlignment.end,
+                              crossAxisAlignment:
+                              WrapCrossAlignment.center,
+                              spacing: 4,
+                              children: [
+                                IconButton(
                                   icon: const Icon(Icons.history,
                                       color: _AdminPalette.primaryBrown),
-                                  onPressed: _showLeaveHistoryModal),
-                              ElevatedButton(
-                                style: ElevatedButton.styleFrom(
+                                  onPressed: _showLeaveHistoryModal,
+                                  padding: EdgeInsets.zero,
+                                  constraints: const BoxConstraints(
+                                      minWidth: 32, minHeight: 32),
+                                ),
+                                ElevatedButton(
+                                  style: ElevatedButton.styleFrom(
                                     backgroundColor:
-                                    _AdminPalette.primaryBrown),
-                                onPressed: _showLeaveApplicationDialog,
-                                child: const Text("Apply Leave",
+                                    _AdminPalette.primaryBrown,
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 12, vertical: 8),
+                                    minimumSize: const Size(0, 32),
+                                    tapTargetSize:
+                                    MaterialTapTargetSize.shrinkWrap,
+                                  ),
+                                  onPressed: _showLeaveApplicationDialog,
+                                  child: const Text(
+                                    "Apply Leave",
                                     style: TextStyle(
-                                        color: Colors.white, fontSize: 12)),
-                              )
-                            ],
-                          )
+                                        color: Colors.white, fontSize: 12),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
                         ],
                       ),
                     ),
                     const SizedBox(height: 16),
 
-                    // ── Attendance & Punch Card ──
+                    // ATTENDANCE CARD
                     Container(
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
@@ -2935,7 +3127,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                       constraints:
                                       const BoxConstraints(),
                                       icon: const Icon(Icons.history,
-                                          color: _AdminPalette.primaryBrown,
+                                          color:
+                                          _AdminPalette.primaryBrown,
                                           size: 20),
                                       onPressed:
                                       _showAttendanceHistoryModal,
@@ -2956,10 +3149,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                     borderRadius:
                                     BorderRadius.circular(12),
                                     border: Border.all(
-                                      color: isCheckedIn
-                                          ? Colors.green
-                                          : Colors.red,
-                                    ),
+                                        color: isCheckedIn
+                                            ? Colors.green
+                                            : Colors.red),
                                   ),
                                   child: Text(
                                     isCheckedIn
@@ -2980,108 +3172,110 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             ],
                           ),
                           const SizedBox(height: 8),
-                          if (isCheckedIn) ...[
-                            Container(
-                              width: double.infinity,
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 12, vertical: 6),
-                              decoration: BoxDecoration(
-                                color: isPunchOutAllowed
-                                    ? Colors.blue.shade50
-                                    : Colors.orange.shade50,
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(
-                                  color: isPunchOutAllowed
-                                      ? Colors.blue
-                                      : Colors.orange,
-                                ),
+
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: isCheckedIn
+                                  ? Colors.blue.shade50
+                                  : (isPunchInAllowed
+                                  ? Colors.green.shade50
+                                  : Colors.orange.shade50),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: isCheckedIn
+                                    ? Colors.blue
+                                    : (isPunchInAllowed
+                                    ? Colors.green
+                                    : Colors.orange),
                               ),
-                              child: Text(
-                                getPunchOutStatus(),
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                  color: isPunchOutAllowed
-                                      ? Colors.blue.shade800
-                                      : Colors.orange.shade800,
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w500,
-                                ),
+                            ),
+                            child: Text(
+                              isCheckedIn
+                                  ? getPunchOutStatus()
+                                  : getPunchInStatusMessage(),
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: isCheckedIn
+                                    ? Colors.blue.shade800
+                                    : (isPunchInAllowed
+                                    ? Colors.green.shade800
+                                    : Colors.orange.shade800),
+                                fontSize: 11,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+
+                          if (lastPunchDate != null &&
+                              lastPunchTime != null) ...[
+                            Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: _AdminPalette.cardHeaderBg,
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: Column(
+                                      children: [
+                                        const Text("Date",
+                                            style: TextStyle(
+                                                fontSize: 10,
+                                                color: Colors.grey)),
+                                        Text(lastPunchDate ?? '',
+                                            style: const TextStyle(
+                                                fontWeight: FontWeight.bold,
+                                                fontSize: 12),
+                                            overflow:
+                                            TextOverflow.ellipsis),
+                                      ],
+                                    ),
+                                  ),
+                                  Expanded(
+                                    child: Column(
+                                      children: [
+                                        const Text("Time",
+                                            style: TextStyle(
+                                                fontSize: 10,
+                                                color: Colors.grey)),
+                                        Text(lastPunchTime ?? '',
+                                            style: const TextStyle(
+                                                fontWeight: FontWeight.bold,
+                                                fontSize: 12),
+                                            overflow:
+                                            TextOverflow.ellipsis),
+                                      ],
+                                    ),
+                                  ),
+                                  Expanded(
+                                    child: Column(
+                                      children: [
+                                        const Text("Day",
+                                            style: TextStyle(
+                                                fontSize: 10,
+                                                color: Colors.grey)),
+                                        Text(lastPunchDay ?? '',
+                                            style: const TextStyle(
+                                                fontWeight: FontWeight.bold,
+                                                fontSize: 12),
+                                            overflow:
+                                            TextOverflow.ellipsis),
+                                      ],
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
                             const SizedBox(height: 8),
-                            if (lastPunchDate != null &&
-                                lastPunchTime != null) ...[
-                              Container(
-                                padding: const EdgeInsets.all(8),
-                                decoration: BoxDecoration(
-                                  color: _AdminPalette.cardHeaderBg,
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: Row(
-                                  children: [
-                                    Expanded(
-                                      child: Column(
-                                        children: [
-                                          const Text("Date",
-                                              style: TextStyle(
-                                                  fontSize: 10,
-                                                  color: Colors.grey)),
-                                          Text(
-                                            lastPunchDate ?? '',
-                                            style: const TextStyle(
-                                                fontWeight: FontWeight.bold,
-                                                fontSize: 12),
-                                            overflow:
-                                            TextOverflow.ellipsis,
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                    Expanded(
-                                      child: Column(
-                                        children: [
-                                          const Text("Time",
-                                              style: TextStyle(
-                                                  fontSize: 10,
-                                                  color: Colors.grey)),
-                                          Text(
-                                            lastPunchTime ?? '',
-                                            style: const TextStyle(
-                                                fontWeight: FontWeight.bold,
-                                                fontSize: 12),
-                                            overflow:
-                                            TextOverflow.ellipsis,
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                    Expanded(
-                                      child: Column(
-                                        children: [
-                                          const Text("Day",
-                                              style: TextStyle(
-                                                  fontSize: 10,
-                                                  color: Colors.grey)),
-                                          Text(
-                                            lastPunchDay ?? '',
-                                            style: const TextStyle(
-                                                fontWeight: FontWeight.bold,
-                                                fontSize: 12),
-                                            overflow:
-                                            TextOverflow.ellipsis,
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                            ],
                           ],
 
-                          // Captured Image Display
-                          if (capturedImageFile != null ||
+                          if ((!kIsWeb && capturedImageFile != null) ||
+                              (capturedImageBytes != null) ||
                               (capturedPhotoUrl != null &&
                                   capturedPhotoUrl!.isNotEmpty)) ...[
                             Container(
@@ -3090,7 +3284,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                 gradient: const LinearGradient(
                                   colors: [
                                     _AdminPalette.primaryBrown,
-                                    _AdminPalette.goldAccent,
+                                    _AdminPalette.goldAccent
                                   ],
                                   begin: Alignment.topLeft,
                                   end: Alignment.bottomRight,
@@ -3116,104 +3310,143 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                   child: SizedBox(
                                     width: 120,
                                     height: 120,
-                                    child: capturedImageFile != null
-                                        ? Image.file(
-                                      capturedImageFile!,
-                                      fit: BoxFit.cover,
-                                      errorBuilder: (context, error,
-                                          stackTrace) {
-                                        return const Icon(Icons.person,
-                                            size: 50,
-                                            color: Colors.grey);
-                                      },
-                                    )
-                                        : (capturedPhotoUrl != null &&
-                                        capturedPhotoUrl!
-                                            .isNotEmpty
-                                        ? Image.network(
-                                      capturedPhotoUrl!
-                                          .startsWith('http')
-                                          ? capturedPhotoUrl!
-                                          : '$API_BASE_URL${capturedPhotoUrl!}',
-                                      fit: BoxFit.cover,
-                                      loadingBuilder: (context,
-                                          child,
-                                          loadingProgress) {
-                                        if (loadingProgress ==
-                                            null) return child;
-                                        return const Center(
-                                          child:
-                                          CircularProgressIndicator(
-                                            color: _AdminPalette
-                                                .goldAccent,
-                                          ),
-                                        );
-                                      },
-                                      errorBuilder: (context,
-                                          error, stackTrace) {
-                                        return const Icon(
-                                            Icons.person,
-                                            size: 50,
-                                            color: Colors.grey);
-                                      },
-                                    )
-                                        : const Icon(Icons.person,
-                                        size: 50,
-                                        color: Colors.grey)),
+                                    child: _buildCapturedPreview(),
                                   ),
                                 ),
                               ),
                             ),
                             const SizedBox(height: 10),
                           ],
-                          SizedBox(
-                            width: double.infinity,
-                            height: 44,
-                            child: ElevatedButton.icon(
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: isCheckedIn
-                                    ? (isPunchOutAllowed
-                                    ? Colors.red.shade700
-                                    : Colors.grey.shade600)
-                                    : const Color(0xFF2E7D32),
-                              ),
-                              icon: const Icon(Icons.camera_alt,
-                                  color: Colors.white, size: 18),
-                              label: Text(
-                                isCheckedIn
-                                    ? (isPunchOutAllowed
-                                    ? "Punch Out (Selfie Verify)"
-                                    : "Punch Out Restricted")
-                                    : "Punch In (Selfie Verify)",
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
+
+                          if (showPunchInButton)
+                            SizedBox(
+                              width: double.infinity,
+                              height: 44,
+                              child: ElevatedButton.icon(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor:
+                                  const Color(0xFF2E7D32),
+                                  shape: RoundedRectangleBorder(
+                                      borderRadius:
+                                      BorderRadius.circular(12)),
                                 ),
-                                overflow: TextOverflow.ellipsis,
+                                icon: const Icon(Icons.camera_alt,
+                                    color: Colors.white, size: 18),
+                                label: const Text(
+                                  "Punch In (Selfie Verify)",
+                                  style: TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.bold),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                onPressed: _triggerSelfiePunch,
                               ),
-                              onPressed: isCheckedIn && !isPunchOutAllowed
-                                  ? null
-                                  : _triggerSelfiePunch,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          if (isCheckedIn && lastPunchType == 'PUNCH_OUT')
-                            const Text(
-                              "✅ Already Checked Out Today",
-                              style: TextStyle(
-                                color: Colors.green,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 12,
+                            )
+                          else if (!isCheckedIn &&
+                              lastPunchType == 'PUNCH_OUT')
+                            Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.symmetric(
+                                  vertical: 12),
+                              decoration: BoxDecoration(
+                                color: Colors.green.shade50,
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: Colors.green),
                               ),
-                            ),
+                              child: const Row(
+                                mainAxisAlignment:
+                                MainAxisAlignment.center,
+                                children: [
+                                  Icon(Icons.check_circle,
+                                      color: Colors.green, size: 18),
+                                  SizedBox(width: 8),
+                                  Text(
+                                    "Punched Out Successfully Today",
+                                    style: TextStyle(
+                                      color: Colors.green,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            )
+                          else if (isCheckedIn)
+                              Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.symmetric(
+                                    vertical: 12),
+                                decoration: BoxDecoration(
+                                  color: Colors.blue.shade50,
+                                  borderRadius:
+                                  BorderRadius.circular(12),
+                                  border: Border.all(color: Colors.blue),
+                                ),
+                                child: const Row(
+                                  mainAxisAlignment:
+                                  MainAxisAlignment.center,
+                                  children: [
+                                    Icon(Icons.timer,
+                                        color: Colors.blue, size: 18),
+                                    SizedBox(width: 8),
+                                    Flexible(
+                                      child: Text(
+                                        "Auto Punch Out at 6:00 PM",
+                                        style: TextStyle(
+                                          color: Colors.blue,
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 13,
+                                        ),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              )
+                            else
+                              Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.symmetric(
+                                    vertical: 12),
+                                decoration: BoxDecoration(
+                                  color: Colors.grey.shade100,
+                                  borderRadius:
+                                  BorderRadius.circular(12),
+                                  border: Border.all(
+                                      color: Colors.grey.shade400),
+                                ),
+                                child: Row(
+                                  mainAxisAlignment:
+                                  MainAxisAlignment.center,
+                                  children: [
+                                    Icon(Icons.lock_clock,
+                                        color: Colors.grey.shade700,
+                                        size: 18),
+                                    const SizedBox(width: 8),
+                                    Flexible(
+                                      child: Text(
+                                        DateTime.now().weekday ==
+                                            DateTime.sunday
+                                            ? "Punch In Not Available on Sunday"
+                                            : "Punch In Closed (After 6:00 PM)",
+                                        style: TextStyle(
+                                          color: Colors.grey.shade700,
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 13,
+                                        ),
+                                        overflow:
+                                        TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
                         ],
                       ),
                     ),
                     const SizedBox(height: 16),
 
-                    // ============================================================
-                    // DAILY REPORT LOG — SINGLE INSTANCE (fixes ticker error)
-                    // ============================================================
+                    // DAILY REPORT CARD
                     Container(
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
@@ -3226,7 +3459,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            // ── Header ──
                             Row(
                               mainAxisAlignment:
                               MainAxisAlignment.spaceBetween,
@@ -3243,11 +3475,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                   children: [
                                     IconButton(
                                       icon: const Icon(Icons.refresh,
-                                          color: _AdminPalette.primaryBrown,
+                                          color:
+                                          _AdminPalette.primaryBrown,
                                           size: 20),
                                       onPressed: () async {
                                         await _fetchDailyReports();
-                                        setState(() {});
                                       },
                                       tooltip: "Refresh Firms",
                                     ),
@@ -3264,738 +3496,300 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             ),
                             const SizedBox(height: 8),
 
-                            // ── Firm dropdown ──
-                            Column(
-                              crossAxisAlignment:
-                              CrossAxisAlignment.start,
-                              children: [
-                                GestureDetector(
-                                  onTap: () {
-                                    setState(() =>
-                                    _showFirmDropdown =
-                                    !_showFirmDropdown);
-                                  },
-                                  child: Container(
-                                    width: double.infinity,
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 14, vertical: 14),
-                                    decoration: BoxDecoration(
-                                      color: _AdminPalette.primaryBrown,
-                                      borderRadius:
-                                      BorderRadius.circular(12),
-                                      border: Border.all(
-                                        color: _showFirmDropdown
-                                            ? _AdminPalette.goldAccent
-                                            : _AdminPalette.primaryBrown,
-                                        width:
-                                        _showFirmDropdown ? 2 : 1,
-                                      ),
-                                    ),
-                                    child: Row(
-                                      children: [
-                                        const Icon(Icons.business,
-                                            color: Colors.white, size: 18),
-                                        const SizedBox(width: 10),
-                                        Expanded(
-                                          child: Text(
-                                            _isAddingNewFirm
-                                                ? "Adding new firm..."
-                                                : (_selectedFirmsMulti
-                                                .isEmpty
-                                                ? "Select Firm Name"
-                                                : _selectedFirmsMulti
-                                                .length ==
-                                                1
-                                                ? _selectedFirmsMulti
-                                                .first
-                                                : "${_selectedFirmsMulti.length} firms selected"),
-                                            style: const TextStyle(
-                                              color: Colors.white,
-                                              fontSize: 13,
-                                              fontWeight: FontWeight.w600,
-                                            ),
-                                            overflow: TextOverflow.ellipsis,
-                                          ),
-                                        ),
-                                        Icon(
-                                          _showFirmDropdown
-                                              ? Icons.keyboard_arrow_up
-                                              : Icons.keyboard_arrow_down,
-                                          color: Colors.white,
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-
-                                if (_showFirmDropdown) ...[
-                                  const SizedBox(height: 6),
-                                  Container(
-                                    decoration: BoxDecoration(
-                                      color: _AdminPalette.primaryBrown,
-                                      borderRadius:
-                                      BorderRadius.circular(12),
-                                      border: Border.all(
-                                          color:
-                                          _AdminPalette.goldAccent,
-                                          width: 1),
-                                      boxShadow: [
-                                        BoxShadow(
-                                          color: Colors.black
-                                              .withOpacity(0.15),
-                                          blurRadius: 8,
-                                          offset: const Offset(0, 4),
-                                        ),
-                                      ],
-                                    ),
-                                    child: Column(
-                                      children: [
-                                        Padding(
-                                          padding: const EdgeInsets
-                                              .symmetric(
-                                              horizontal: 14,
-                                              vertical: 8),
-                                          child: Row(
-                                            children: [
-                                              const Icon(Icons.list_alt,
-                                                  color: _AdminPalette
-                                                      .goldLight,
-                                                  size: 16),
-                                              const SizedBox(width: 6),
-                                              const Expanded(
-                                                child: Text(
-                                                  "Registered Firms",
-                                                  style: TextStyle(
-                                                    color: _AdminPalette
-                                                        .goldLight,
-                                                    fontSize: 11,
-                                                    fontWeight:
-                                                    FontWeight.bold,
-                                                  ),
-                                                ),
-                                              ),
-                                              if (_registeredFirms
-                                                  .isNotEmpty)
-                                                TextButton(
-                                                  onPressed: () {
-                                                    setState(() {
-                                                      if (_selectedFirmsMulti
-                                                          .length ==
-                                                          _registeredFirms
-                                                              .length) {
-                                                        _selectedFirmsMulti
-                                                            .clear();
-                                                      } else {
-                                                        _selectedFirmsMulti =
-                                                        Set<String>.from(
-                                                            _registeredFirms);
-                                                      }
-                                                      _firmNameController
-                                                          .text =
-                                                          _selectedFirmsMulti
-                                                              .join(', ');
-                                                    });
-                                                  },
-                                                  style:
-                                                  TextButton.styleFrom(
-                                                    padding:
-                                                    EdgeInsets.zero,
-                                                    minimumSize:
-                                                    const Size(0, 0),
-                                                    tapTargetSize:
-                                                    MaterialTapTargetSize
-                                                        .shrinkWrap,
-                                                  ),
-                                                  child: Text(
-                                                    _selectedFirmsMulti
-                                                        .length ==
-                                                        _registeredFirms
-                                                            .length
-                                                        ? "Clear All"
-                                                        : "Select All",
-                                                    style: const TextStyle(
-                                                      color: _AdminPalette
-                                                          .goldAccent,
-                                                      fontSize: 11,
-                                                      fontWeight:
-                                                      FontWeight.bold,
-                                                    ),
-                                                  ),
-                                                ),
-                                            ],
-                                          ),
-                                        ),
-                                        const Divider(
-                                            color: Colors.white24,
-                                            height: 1),
-
-                                        if (_registeredFirms.isEmpty)
-                                          const Padding(
-                                            padding: EdgeInsets.all(14),
-                                            child: Text(
-                                              "No firms yet. Add your first firm below.",
-                                              style: TextStyle(
-                                                  color: Colors.white70,
-                                                  fontSize: 12),
-                                            ),
-                                          )
-                                        else
-                                          ConstrainedBox(
-                                            constraints:
-                                            const BoxConstraints(
-                                                maxHeight: 220),
-                                            child: SingleChildScrollView(
-                                              child: Column(
-                                                children: _registeredFirms
-                                                    .map((firm) {
-                                                  final isChecked =
-                                                  _selectedFirmsMulti
-                                                      .contains(firm);
-                                                  return InkWell(
-                                                    onTap: () {
-                                                      setState(() {
-                                                        if (isChecked) {
-                                                          _selectedFirmsMulti
-                                                              .remove(firm);
-                                                        } else {
-                                                          _selectedFirmsMulti
-                                                              .add(firm);
-                                                        }
-                                                        _firmNameController
-                                                            .text =
-                                                            _selectedFirmsMulti
-                                                                .join(', ');
-                                                      });
-                                                    },
-                                                    child: Padding(
-                                                      padding: const EdgeInsets
-                                                          .symmetric(
-                                                          horizontal: 10,
-                                                          vertical: 6),
-                                                      child: Row(
-                                                        children: [
-                                                          SizedBox(
-                                                            height: 24,
-                                                            width: 24,
-                                                            child: Checkbox(
-                                                              value:
-                                                              isChecked,
-                                                              activeColor:
-                                                              _AdminPalette
-                                                                  .goldAccent,
-                                                              checkColor:
-                                                              _AdminPalette
-                                                                  .primaryBrown,
-                                                              side: const BorderSide(
-                                                                  color: Colors
-                                                                      .white,
-                                                                  width: 1.5),
-                                                              onChanged: (v) {
-                                                                setState(() {
-                                                                  if (v ==
-                                                                      true) {
-                                                                    _selectedFirmsMulti
-                                                                        .add(
-                                                                        firm);
-                                                                  } else {
-                                                                    _selectedFirmsMulti
-                                                                        .remove(
-                                                                        firm);
-                                                                  }
-                                                                  _firmNameController
-                                                                      .text =
-                                                                      _selectedFirmsMulti
-                                                                          .join(
-                                                                          ', ');
-                                                                });
-                                                              },
-                                                            ),
-                                                          ),
-                                                          const SizedBox(
-                                                              width: 8),
-                                                          Expanded(
-                                                            child: Text(
-                                                              firm,
-                                                              style: const TextStyle(
-                                                                  color: Colors
-                                                                      .white,
-                                                                  fontSize:
-                                                                  13),
-                                                              overflow:
-                                                              TextOverflow
-                                                                  .ellipsis,
-                                                            ),
-                                                          ),
-                                                          const Icon(
-                                                              Icons.store,
-                                                              color: Colors
-                                                                  .white54,
-                                                              size: 14),
-                                                        ],
-                                                      ),
-                                                    ),
-                                                  );
-                                                }).toList(),
-                                              ),
-                                            ),
-                                          ),
-
-                                        const Divider(
-                                            color: Colors.white24,
-                                            height: 1),
-
-                                        InkWell(
-                                          onTap: () {
-                                            setState(() {
-                                              _isAddingNewFirm = true;
-                                              _showFirmDropdown = false;
-                                              _selectedFirmsMulti.clear();
-                                              _firmNameController.clear();
-                                            });
-                                          },
-                                          child: const Padding(
-                                            padding: EdgeInsets.symmetric(
-                                                horizontal: 14,
-                                                vertical: 10),
-                                            child: Row(
-                                              children: [
-                                                Icon(
-                                                    Icons
-                                                        .add_circle_outline,
-                                                    color: _AdminPalette
-                                                        .goldAccent,
-                                                    size: 18),
-                                                SizedBox(width: 8),
-                                                Text(
-                                                  "Add New Firm",
-                                                  style: TextStyle(
-                                                    color: _AdminPalette
-                                                        .goldAccent,
-                                                    fontSize: 13,
-                                                    fontWeight:
-                                                    FontWeight.bold,
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-
-                                if (_isAddingNewFirm) ...[
-                                  const SizedBox(height: 8),
-                                  Row(
-                                    children: [
-                                      Expanded(
-                                        child: TextFormField(
-                                          controller:
-                                          _firmNameController,
-                                          decoration: InputDecoration(
-                                            labelText:
-                                            'Enter New Firm Name',
-                                            border: OutlineInputBorder(
-                                                borderRadius:
-                                                BorderRadius.circular(
-                                                    12)),
-                                            isDense: true,
-                                          ),
-                                          validator: (v) => (v == null ||
-                                              v.trim().isEmpty)
-                                              ? 'Enter Firm Name'
-                                              : null,
-                                        ),
-                                      ),
-                                      const SizedBox(width: 6),
-                                      IconButton(
-                                        icon: const Icon(Icons.cancel,
-                                            color: Colors.red),
-                                        onPressed: () {
-                                          setState(() {
-                                            _isAddingNewFirm = false;
-                                            _firmNameController.clear();
-                                          });
-                                        },
-                                      ),
-                                    ],
-                                  ),
-                                ],
-                              ],
-                            ),
-
-                            const SizedBox(height: 12),
-
-                            // ── Mobile + PIN ──
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: TextFormField(
-                                    controller: _mobileController,
-                                    keyboardType: TextInputType.phone,
-                                    maxLength: 10,
-                                    decoration: InputDecoration(
-                                      labelText: 'Mobile No.',
-                                      counterText: '',
-                                      border: OutlineInputBorder(
-                                          borderRadius:
-                                          BorderRadius.circular(12)),
-                                      isDense: true,
-                                    ),
-                                    validator: (v) =>
-                                    (v == null || v.length < 10)
-                                        ? '10 Digits required'
-                                        : null,
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: TextFormField(
-                                    controller: _pinCodeController,
-                                    keyboardType: TextInputType.number,
-                                    maxLength: 6,
-                                    decoration: InputDecoration(
-                                      labelText: 'PIN Code',
-                                      counterText: '',
-                                      border: OutlineInputBorder(
-                                          borderRadius:
-                                          BorderRadius.circular(12)),
-                                      isDense: true,
-                                    ),
-                                    validator: (v) =>
-                                    (v == null || v.length < 6)
-                                        ? 'Invalid PIN'
-                                        : null,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 10),
-
-                            // ── Verify Firm button ──
-                            SizedBox(
-                              width: double.infinity,
-                              height: 42,
-                              child: ElevatedButton.icon(
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: _firmVerified
-                                      ? Colors.green.shade700
-                                      : _AdminPalette.primaryBrown,
-                                  shape: RoundedRectangleBorder(
-                                      borderRadius:
-                                      BorderRadius.circular(12)),
-                                ),
-                                icon: _isVerifyingFirm
-                                    ? const SizedBox(
-                                  width: 16,
-                                  height: 16,
-                                  child:
-                                  CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    color: Colors.white,
-                                  ),
-                                )
-                                    : Icon(
-                                  _firmVerified
-                                      ? Icons.verified
-                                      : Icons.verified_user_outlined,
-                                  color: Colors.white,
-                                  size: 18,
-                                ),
-                                label: Text(
-                                  _isVerifyingFirm
-                                      ? "Verifying..."
-                                      : _firmVerified
-                                      ? "Firm Verified ✓"
-                                      : "Verify Firm",
-                                  style: const TextStyle(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 12),
-                                ),
-                                onPressed: _isVerifyingFirm
-                                    ? null
-                                    : _verifyFirmFromDatabase,
-                              ),
-                            ),
-
-                            // ── Verification feedback ──
-                            if (_firmVerifyError != null) ...[
-                              const SizedBox(height: 6),
-                              Container(
+                            GestureDetector(
+                              onTap: () {
+                                _safeSetState(() => _showFirmDropdown =
+                                !_showFirmDropdown);
+                              },
+                              child: Container(
                                 width: double.infinity,
-                                padding: const EdgeInsets.all(8),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 14, vertical: 14),
                                 decoration: BoxDecoration(
-                                  color: Colors.red.shade50,
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(
-                                      color: Colors.red.shade200),
+                                  color: _AdminPalette.primaryBrown,
+                                  borderRadius: BorderRadius.circular(12),
                                 ),
-                                child: Row(
-                                  children: [
-                                    const Icon(Icons.error_outline,
-                                        color: Colors.red, size: 16),
-                                    const SizedBox(width: 6),
-                                    Expanded(
-                                      child: Text(
-                                        _firmVerifyError!,
-                                        style: const TextStyle(
-                                            color: Colors.red,
-                                            fontSize: 11),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                            if (_firmVerified &&
-                                _verifiedFirmName != null) ...[
-                              const SizedBox(height: 6),
-                              Container(
-                                width: double.infinity,
-                                padding: const EdgeInsets.all(8),
-                                decoration: BoxDecoration(
-                                  color: Colors.green.shade50,
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(
-                                      color: Colors.green.shade200),
-                                ),
-                                child: Row(
-                                  children: [
-                                    const Icon(Icons.check_circle,
-                                        color: Colors.green, size: 16),
-                                    const SizedBox(width: 6),
-                                    Expanded(
-                                      child: Text(
-                                        "Firm '$_verifiedFirmName' verified. You can now select products.",
-                                        style: const TextStyle(
-                                            color: Colors.green,
-                                            fontSize: 11),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-
-                            const SizedBox(height: 12),
-
-                            // ── Product section ──
-                            if (_firmVerified) ...[
-                              DropdownButtonFormField<String>(
-                                value: selectedCategory,
-                                isExpanded: true,
-                                decoration: InputDecoration(
-                                  labelText: 'Product Category',
-                                  border: OutlineInputBorder(
-                                      borderRadius:
-                                      BorderRadius.circular(12)),
-                                  isDense: true,
-                                ),
-                                items: productCatalog.keys
-                                    .map((cat) => DropdownMenuItem(
-                                    value: cat, child: Text(cat)))
-                                    .toList(),
-                                onChanged: (cat) {
-                                  if (cat != null) {
-                                    setState(() {
-                                      selectedCategory = cat;
-                                      final list =
-                                      productCatalog[cat];
-                                      if (list != null &&
-                                          list.isNotEmpty) {
-                                        selectedProductName =
-                                        list.first['name'] as String;
-                                        selectedProductPrice = (list
-                                            .first['price'] as num)
-                                            .toDouble();
-                                      }
-                                    });
-                                  }
-                                },
-                              ),
-                              const SizedBox(height: 12),
-
-                              if (selectedCategory != null &&
-                                  productCatalog[selectedCategory] !=
-                                      null)
-                                DropdownButtonFormField<String>(
-                                  value: selectedProductName,
-                                  isExpanded: true,
-                                  decoration: InputDecoration(
-                                    labelText: 'Select Item',
-                                    border: OutlineInputBorder(
-                                        borderRadius:
-                                        BorderRadius.circular(12)),
-                                    isDense: true,
-                                  ),
-                                  items: productCatalog[selectedCategory]!
-                                      .map((prod) {
-                                    return DropdownMenuItem<String>(
-                                      value: prod['name'] as String,
-                                      child: Text(
-                                          "${prod['name']} - ₹${prod['price']}"),
-                                    );
-                                  }).toList(),
-                                  onChanged: (prodName) {
-                                    if (prodName != null) {
-                                      final prod = productCatalog[
-                                      selectedCategory]!
-                                          .firstWhere((e) =>
-                                      e['name'] == prodName);
-                                      setState(() {
-                                        selectedProductName = prodName;
-                                        selectedProductPrice =
-                                            (prod['price'] as num)
-                                                .toDouble();
-                                      });
-                                    }
-                                  },
-                                ),
-                              const SizedBox(height: 12),
-
-                              TextFormField(
-                                controller: _qtyController,
-                                keyboardType: TextInputType.number,
-                                decoration: InputDecoration(
-                                  labelText: 'Quantity',
-                                  border: OutlineInputBorder(
-                                      borderRadius:
-                                      BorderRadius.circular(12)),
-                                  isDense: true,
-                                ),
-                                onChanged: (_) => setState(() {}),
-                                validator: (v) => (v == null || v.isEmpty)
-                                    ? 'Enter Qty'
-                                    : null,
-                              ),
-                              const SizedBox(height: 12),
-
-                              Container(
-                                padding: const EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                    color: _AdminPalette.cardHeaderBg,
-                                    borderRadius:
-                                    BorderRadius.circular(12)),
                                 child: Row(
                                   mainAxisAlignment:
                                   MainAxisAlignment.spaceBetween,
                                   children: [
-                                    const Text(
-                                      "Calculated Total:",
-                                      style: TextStyle(
-                                          fontWeight: FontWeight.bold,
-                                          color: _AdminPalette.inkDark),
+                                    Expanded(
+                                      child: Text(
+                                        _selectedFirmsMulti.isNotEmpty
+                                            ? "Selected: ${_selectedFirmsMulti.join(', ')}"
+                                            : "Select Registered Firm(s)",
+                                        style: const TextStyle(
+                                            color: Colors.white,
+                                            fontWeight: FontWeight.bold),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
                                     ),
-                                    Text(
-                                      "₹${calculatedTotal.toStringAsFixed(2)}",
-                                      style: const TextStyle(
-                                          fontWeight: FontWeight.bold,
-                                          fontSize: 16,
-                                          color: Colors.green),
+                                    Icon(
+                                      _showFirmDropdown
+                                          ? Icons.arrow_drop_up
+                                          : Icons.arrow_drop_down,
+                                      color: Colors.white,
                                     ),
                                   ],
                                 ),
                               ),
-                              const SizedBox(height: 12),
+                            ),
 
-                              Row(
-                                children: [
-                                  Expanded(
-                                    flex: 2,
-                                    child: SizedBox(
-                                      height: 44,
-                                      child: ElevatedButton.icon(
-                                        style:
-                                        ElevatedButton.styleFrom(
-                                          backgroundColor:
-                                          _AdminPalette.primaryBrown,
-                                        ),
-                                        icon: const Icon(
-                                            Icons.check_circle_outline,
-                                            color: Colors.white,
-                                            size: 18),
-                                        label: const Text(
-                                          "Save Order",
-                                          style: TextStyle(
-                                              color: Colors.white,
-                                              fontWeight: FontWeight.bold,
-                                              fontSize: 12),
-                                        ),
-                                        onPressed: () {
-                                          if (_taskFormKey.currentState!
-                                              .validate()) {
-                                            _submitDailyReportApi();
-                                          }
-                                        },
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    flex: 1,
-                                    child: SizedBox(
-                                      height: 44,
-                                      child: ElevatedButton.icon(
-                                        style:
-                                        ElevatedButton.styleFrom(
-                                          backgroundColor:
-                                          _AdminPalette.whatsappGreen,
-                                        ),
-                                        icon: const Icon(Icons.send,
-                                            color: Colors.white,
-                                            size: 16),
-                                        label: const Text(
-                                          "WhatsApp",
-                                          style: TextStyle(
-                                              color: Colors.white,
-                                              fontWeight: FontWeight.bold,
-                                              fontSize: 11),
-                                        ),
-                                        onPressed:
-                                        _sendWhatsAppOrderAndSave,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ] else ...[
+                            if (_showFirmDropdown) ...[
+                              const SizedBox(height: 8),
                               Container(
-                                width: double.infinity,
-                                padding: const EdgeInsets.all(16),
+                                padding: const EdgeInsets.all(8),
                                 decoration: BoxDecoration(
-                                  color: Colors.grey.shade100,
+                                  color: _AdminPalette.bgWarm,
                                   borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(
-                                      color: Colors.grey.shade300),
+                                  border:
+                                  Border.all(color: _AdminPalette.border),
                                 ),
                                 child: Column(
                                   children: [
-                                    Icon(Icons.lock_outline,
-                                        color: Colors.grey.shade600,
-                                        size: 28),
-                                    const SizedBox(height: 6),
-                                    Text(
-                                      "Product selection is locked",
-                                      style: TextStyle(
-                                        color: Colors.grey.shade700,
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 12,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      "Select a firm, enter mobile & PIN code, then tap 'Verify Firm'.",
-                                      textAlign: TextAlign.center,
-                                      style: TextStyle(
-                                          color: Colors.grey.shade600,
-                                          fontSize: 11),
-                                    ),
+                                    ..._registeredFirms.map((firm) {
+                                      final isSel =
+                                      _selectedFirmsMulti.contains(firm);
+                                      return CheckboxListTile(
+                                        title: Text(firm,
+                                            style: const TextStyle(
+                                                fontSize: 13,
+                                                fontWeight: FontWeight.w500)),
+                                        value: isSel,
+                                        activeColor:
+                                        _AdminPalette.primaryBrown,
+                                        onChanged: (val) {
+                                          _safeSetState(() {
+                                            if (val == true) {
+                                              _selectedFirmsMulti.add(firm);
+                                              _firmNameController.text = firm;
+                                            } else {
+                                              _selectedFirmsMulti.remove(firm);
+                                              if (_selectedFirmsMulti
+                                                  .isNotEmpty) {
+                                                _firmNameController.text =
+                                                    _selectedFirmsMulti.first;
+                                              } else {
+                                                _firmNameController.clear();
+                                              }
+                                            }
+                                          });
+                                        },
+                                      );
+                                    }).toList(),
+                                    const Divider(),
+                                    TextButton.icon(
+                                      icon: const Icon(Icons.add,
+                                          color: _AdminPalette.primaryBrown),
+                                      label: const Text(
+                                          "Add New Firm Name",
+                                          style: TextStyle(
+                                              color: _AdminPalette.primaryBrown,
+                                              fontWeight: FontWeight.bold)),
+                                      onPressed: () {
+                                        _safeSetState(() {
+                                          _isAddingNewFirm = true;
+                                          _showFirmDropdown = false;
+                                          _selectedFirmsMulti.clear();
+                                          _firmNameController.clear();
+                                        });
+                                      },
+                                    )
                                   ],
                                 ),
                               ),
                             ],
+
+                            if (_isAddingNewFirm ||
+                                _registeredFirms.isEmpty) ...[
+                              const SizedBox(height: 12),
+                              TextFormField(
+                                controller: _firmNameController,
+                                decoration: InputDecoration(
+                                  labelText: "New Firm Name *",
+                                  border: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(12)),
+                                  suffixIcon: _isCheckingFirm
+                                      ? const Padding(
+                                    padding: EdgeInsets.all(10),
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 2),
+                                  )
+                                      : null,
+                                ),
+                                validator: (v) => (v == null || v.trim().isEmpty)
+                                    ? "Firm name required"
+                                    : null,
+                                onChanged: (val) async {
+                                  if (val.trim().length > 2) {
+                                    bool exists =
+                                    await _checkFirmExists(val.trim());
+                                    _safeSetState(() {
+                                      _isFirmExisting = exists;
+                                    });
+                                  }
+                                },
+                              ),
+                            ],
+
+                            const SizedBox(height: 12),
+                            TextFormField(
+                              controller: _mobileController,
+                              keyboardType: TextInputType.phone,
+                              decoration: InputDecoration(
+                                labelText: "Mobile Number",
+                                border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(12)),
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            TextFormField(
+                              controller: _pinCodeController,
+                              keyboardType: TextInputType.number,
+                              decoration: InputDecoration(
+                                labelText: "PIN Code",
+                                border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(12)),
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            TextFormField(
+                              controller: _addressController,
+                              maxLines: 2,
+                              decoration: InputDecoration(
+                                labelText: "Address",
+                                border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(12)),
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+
+                            // PRODUCT CATEGORY DROPDOWN
+                            DropdownButtonFormField<String>(
+                              value: selectedCategory,
+                              decoration: InputDecoration(
+                                labelText: "Category",
+                                border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(12)),
+                              ),
+                              items: productCatalog.keys
+                                  .map((cat) => DropdownMenuItem(
+                                value: cat,
+                                child: Text(cat),
+                              ))
+                                  .toList(),
+                              onChanged: (val) {
+                                if (val != null) {
+                                  _safeSetState(() {
+                                    selectedCategory = val;
+                                    final items = productCatalog[val] ?? [];
+                                    if (items.isNotEmpty) {
+                                      selectedProductName = items.first['name'];
+                                      selectedProductPrice =
+                                      items.first['price'];
+                                    } else {
+                                      selectedProductName = null;
+                                      selectedProductPrice = 0.0;
+                                    }
+                                  });
+                                }
+                              },
+                            ),
+                            const SizedBox(height: 12),
+
+                            // PRODUCT ITEM DROPDOWN
+                            DropdownButtonFormField<String>(
+                              value: selectedProductName,
+                              decoration: InputDecoration(
+                                labelText: "Product Name",
+                                border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(12)),
+                              ),
+                              items: (productCatalog[selectedCategory] ?? [])
+                                  .map((p) => DropdownMenuItem<String>(
+                                value: p['name'].toString(),
+                                child: Text("${p['name']} (₹${p['price']})"),
+                              ))
+                                  .toList(),
+                              onChanged: (val) {
+                                if (val != null) {
+                                  final selected =
+                                  (productCatalog[selectedCategory] ?? [])
+                                      .firstWhere((p) => p['name'] == val);
+                                  _safeSetState(() {
+                                    selectedProductName = val;
+                                    selectedProductPrice = selected['price'];
+                                  });
+                                }
+                              },
+                            ),
+                            const SizedBox(height: 12),
+
+                            // QUANTITY INPUT
+                            TextFormField(
+                              controller: _qtyController,
+                              keyboardType: TextInputType.number,
+                              decoration: InputDecoration(
+                                labelText: "Quantity",
+                                border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(12)),
+                              ),
+                              onChanged: (_) {
+                                _safeSetState(() {});
+                              },
+                            ),
+                            const SizedBox(height: 16),
+
+                            // TOTAL SUMMARY DISPLAY
+                            Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: _AdminPalette.cardHeaderBg,
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: _AdminPalette.border),
+                              ),
+                              child: Row(
+                                mainAxisAlignment:
+                                MainAxisAlignment.spaceBetween,
+                                children: [
+                                  const Text("Total Calculated Amount:",
+                                      style: TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 13)),
+                                  Text(
+                                    "₹${calculatedTotal.toStringAsFixed(2)}",
+                                    style: const TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 16,
+                                        color: Colors.green),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+
+                            // SUBMIT BUTTON
+                            SizedBox(
+                              width: double.infinity,
+                              height: 48,
+                              child: ElevatedButton.icon(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor:
+                                  _AdminPalette.whatsappGreen,
+                                  shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12)),
+                                ),
+                                icon: const Icon(Icons.send, color: Colors.white),
+                                label: const Text(
+                                  "Submit Order & WhatsApp",
+                                  style: TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 14),
+                                ),
+                                onPressed: _handleSendOrderAndWhatsApp,
+                              ),
+                            ),
                           ],
                         ),
                       ),
@@ -4006,76 +3800,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ],
           ),
         ),
-      ),
-    );
-  }
-
-  Widget _buildTopSummaryCard() {
-    return Container(
-      margin: const EdgeInsets.only(top: 12),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: _AdminPalette.cardHeaderBg,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _AdminPalette.border),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
-        children: [
-          Expanded(
-            child: Column(
-              children: [
-                const Text("Monthly Sales",
-                    style: TextStyle(
-                        fontSize: 10, color: _AdminPalette.inkDark),
-                    overflow: TextOverflow.ellipsis),
-                const SizedBox(height: 4),
-                Text("₹${totalMonthlySales.toStringAsFixed(0)}",
-                    style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.green)),
-              ],
-            ),
-          ),
-          Container(height: 25, width: 1, color: _AdminPalette.border),
-          Expanded(
-            child: Column(
-              children: [
-                const Text("Daily Reports",
-                    style: TextStyle(
-                        fontSize: 10, color: _AdminPalette.inkDark),
-                    overflow: TextOverflow.ellipsis),
-                const SizedBox(height: 4),
-                Container(
-                  height: 22,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: _AdminPalette.primaryBrown
-                  ),
-                  child: Text("${dailyTaskHistory.length}", style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white)),
-                ),
-              ],
-            ),
-          ),
-          Container(height: 25, width: 1, color: _AdminPalette.border),
-          Expanded(
-            child: Column(
-              children: [
-                const Text("Active Team",
-                    style: TextStyle(
-                        fontSize: 10, color: _AdminPalette.inkDark),
-                    overflow: TextOverflow.ellipsis),
-                const SizedBox(height: 4),
-                Text("${hierarchyList.length}",
-                    style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.blueAccent)),
-              ],
-            ),
-          ),
-        ],
       ),
     );
   }
