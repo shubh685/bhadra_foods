@@ -18,7 +18,7 @@ import 'dart:io' show File, Platform;
 import 'Log_In.dart';
 
 // API Base URL
-const String API_BASE_URL = 'http://192.168.0.104/bhadra_foods/';
+const String API_BASE_URL = 'http://10.249.124.78/bhadra_foods/';
 
 class _AdminPalette {
   static const darkHeaderTop = Color(0xFF381C00);
@@ -174,6 +174,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   @override
+  @override
   void initState() {
     super.initState();
     userRole = widget.loggedInRole;
@@ -196,7 +197,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _fetchLeaveHistory();
     fetchHierarchyAndRoutes();
 
-    // 🛑 FIX: Fetch attendance AFTER assigned route resolves the correct emp_id/userId
+    // ✅ FIX: Fetch attendance AFTER assigned route resolves the correct emp_id/userId
     _fetchAssignedRoute().then((_) {
       _fetchAttendanceStatus();
     });
@@ -727,8 +728,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     _isFetchingAttendance = true;
     try {
-      // Pass both emp_id and user_id to cover backend query variations
-      final url = Uri.parse("${API_BASE_URL}get_attendance.php?emp_id=$userId&user_id=$userId");
+      // ✅ Pass both emp_id and user_id to cover backend query variations
+      final url = Uri.parse(
+          "${API_BASE_URL}get_attendance.php?emp_id=${Uri.encodeComponent(userId)}&user_id=${Uri.encodeComponent(userId)}");
       debugPrint("🔍 Fetching attendance for identifier: $userId from $url");
 
       final response = await http.get(url);
@@ -749,7 +751,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         data = {'history': decodedBody};
       }
 
-      // Safely extract list from various possible response keys
+      // ✅ Safely extract list from various possible response keys
       final List rawList = (data['history'] ??
           data['data'] ??
           data['attendance'] ??
@@ -776,12 +778,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
           .map((e) => Map<String, dynamic>.from(e as Map))
           .toList();
 
-      final Map<String, dynamic> latest = typed.first;
+      // ✅ Filter records belonging to this user (in case API returned all)
+      final String currentUserId = userId.trim();
+      final List<Map<String, dynamic>> mine = typed.where((row) {
+        final emp = (row['emp_id']?.toString() ?? '').trim();
+        final uid = (row['user_id']?.toString() ?? '').trim();
+        return emp == currentUserId || uid == currentUserId;
+      }).toList();
+
+      final List<Map<String, dynamic>> effective = mine.isNotEmpty ? mine : typed;
+      final Map<String, dynamic> latest = effective.first;
 
       final String latestPunchType = (latest['punch_type']?.toString() ??
           latest['type']?.toString() ??
           latest['status']?.toString() ??
-          '').toUpperCase();
+          '')
+          .toUpperCase();
 
       String? displayPhoto;
       final String rawPhoto = latest['photo']?.toString() ??
@@ -818,7 +830,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       }
 
       _safeSetState(() {
-        attendanceHistory = typed;
+        attendanceHistory = effective;
         isCheckedIn = isToday && latestPunchType == 'PUNCH_IN';
         lastPunchType = latestPunchType.isEmpty ? null : latestPunchType;
         capturedPhotoUrl = isToday ? displayPhoto : null;

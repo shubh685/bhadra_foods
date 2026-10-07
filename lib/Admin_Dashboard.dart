@@ -18,7 +18,7 @@ class _AdminPalette {
 }
 
 // API Base URL
-const String API_BASE_URL = 'http://192.168.0.104/bhadra_foods/';
+const String API_BASE_URL = 'http://10.249.124.78/bhadra_foods/';
 
 // Model for Admin User
 class AdminModel {
@@ -143,44 +143,75 @@ class SalesmanModel {
 }
 
 // Model for Attendance mapped directly to MySQL table 'attendance'
+// Model for Attendance mapped directly to MySQL table 'attendance'
 class AttendanceRecord {
   String id;
   String empId;
+  String userId;
   String role;
   String photo;
   String punchType;
   String punchDate;
   String punchTime;
   String day;
+  String address;
+  String latitude;
+  String longitude;
   String createdAt;
+  String updatedAt;
 
   AttendanceRecord({
     required this.id,
     required this.empId,
+    required this.userId,
     required this.role,
     required this.photo,
     required this.punchType,
     required this.punchDate,
     required this.punchTime,
     required this.day,
+    required this.address,
+    required this.latitude,
+    required this.longitude,
     required this.createdAt,
+    required this.updatedAt,
   });
 
   factory AttendanceRecord.fromJson(Map<String, dynamic> json) {
     return AttendanceRecord(
       id: json['id']?.toString() ?? '',
       empId: json['emp_id']?.toString() ?? '',
-      role: json['role'] ?? '',
-      photo: json['photo'] ?? '',
-      punchType: json['punch_type'] ?? '',
-      punchDate: json['punch_date'] ?? '',
-      punchTime: json['punch_time'] ?? '',
-      day: json['day'] ?? '',
-      createdAt: json['created_at'] ?? '',
+      userId: json['user_id']?.toString() ?? '',
+      role: json['role']?.toString() ?? '',
+      photo: json['photo']?.toString() ??
+          json['image']?.toString() ??
+          json['photo_url']?.toString() ??
+          '',
+      punchType: (json['punch_type']?.toString() ??
+          json['type']?.toString() ??
+          json['status']?.toString() ??
+          '')
+          .toUpperCase(),
+      punchDate: json['punch_date']?.toString() ??
+          json['date']?.toString() ??
+          json['created_at']?.toString()?.split(' ').first ??
+          '',
+      punchTime: json['punch_time']?.toString() ??
+          json['time']?.toString() ??
+          (json['created_at']?.toString()?.contains(' ') == true
+              ? json['created_at'].toString().split(' ').last
+              : ''),
+      day: json['day']?.toString() ?? '',
+      address: json['address']?.toString() ?? '',
+      latitude: json['latitude']?.toString() ?? '',
+      longitude: json['longitude']?.toString() ?? '',
+      createdAt: json['created_at']?.toString() ?? '',
+      updatedAt: json['updated_at']?.toString() ??
+          json['created_at']?.toString() ??
+          '',
     );
   }
 }
-
 // Model for Product Catalog
 class ProductItem {
   String id;
@@ -327,7 +358,7 @@ class AdminDashboard extends StatefulWidget {
 class _AdminDashboardState extends State<AdminDashboard> {
   late Timer _timer;
   DateTime _currentTime = DateTime.now();
-
+  Timer? _locationRefreshTimer;
   // Auto password generation
   bool isGeneratingPassword = false;
   String generatedPassword = '';
@@ -380,11 +411,17 @@ class _AdminDashboardState extends State<AdminDashboard> {
       }
     });
     _loadAllData();
+    _locationRefreshTimer = Timer.periodic(const Duration(minutes: 2), (_) {
+      if (mounted && !isLoadingSalesmen) {
+        _fetchSalesmenData();
+      }
+    });
   }
 
   @override
   void dispose() {
     _timer.cancel();
+    _locationRefreshTimer?.cancel();
     super.dispose();
   }
 
@@ -499,6 +536,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
 
   Future<void> _fetchSalesmanLocation(SalesmanModel salesman) async {
     setState(() => _isFetchingLocation = true);
+    await _autoFetchAllLocations();
 
     try {
       double? lat = salesman.latitude;
@@ -697,33 +735,82 @@ class _AdminDashboardState extends State<AdminDashboard> {
     try {
       final queryParam =
       (empId.isEmpty || empId == 'all') ? 'all' : Uri.encodeComponent(empId);
+      final url = Uri.parse(
+          '${API_BASE_URL}get_attendance.php?emp_id=$queryParam&user_id=$queryParam');
+      debugPrint("🔍 Admin fetching attendance from $url");
+
       final response = await http.get(
-        Uri.parse('${API_BASE_URL}get_attendance.php?emp_id=$queryParam'),
+        url,
         headers: {'Accept': 'application/json'},
       );
 
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        if (data['status'] == true || data['status'] == 'success') {
-          final List<dynamic> history = data['history'] ?? data['data'] ?? [];
-          setState(() {
-            attendanceHistory =
-                history.map((j) => AttendanceRecord.fromJson(j)).toList();
-            isLoadingAttendance = false;
-          });
-        } else {
-          setState(() {
-            attendanceHistory = [];
-            isLoadingAttendance = false;
-          });
-        }
-      } else {
+      if (response.statusCode != 200) {
+        debugPrint("❌ Attendance HTTP Error: ${response.statusCode}");
         setState(() {
           attendanceHistory = [];
           isLoadingAttendance = false;
         });
+        return;
       }
+
+      final dynamic decodedBody = json.decode(response.body);
+      debugPrint("📥 Admin Attendance API Response: ${response.body}");
+
+      Map<String, dynamic> data = {};
+      if (decodedBody is Map<String, dynamic>) {
+        data = decodedBody;
+      } else if (decodedBody is List) {
+        data = {'history': decodedBody};
+      }
+
+      // ✅ Safely extract list from various possible response keys
+      final List rawList = (data['history'] ??
+          data['data'] ??
+          data['attendance'] ??
+          data['records'] ??
+          []) as List;
+
+      if (rawList.isEmpty) {
+        debugPrint("⚠️ Admin attendance list is empty for emp_id: $empId");
+        setState(() {
+          attendanceHistory = [];
+          isLoadingAttendance = false;
+        });
+        return;
+      }
+
+      final List<Map<String, dynamic>> typed = rawList
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+
+      // ✅ If filtering a specific emp, keep only matching rows
+      List<Map<String, dynamic>> effective = typed;
+      if (empId.isNotEmpty && empId != 'all') {
+        final String target = empId.trim();
+        final List<Map<String, dynamic>> mine = typed.where((row) {
+          final emp = (row['emp_id']?.toString() ?? '').trim();
+          final uid = (row['user_id']?.toString() ?? '').trim();
+          return emp == target || uid == target;
+        }).toList();
+        if (mine.isNotEmpty) effective = mine;
+      }
+
+      // ✅ Sort by id DESC so latest entries come first (Salesman Dashboard behavior)
+      effective.sort((a, b) {
+        final aId = int.tryParse(a['id']?.toString() ?? '0') ?? 0;
+        final bId = int.tryParse(b['id']?.toString() ?? '0') ?? 0;
+        return bId.compareTo(aId);
+      });
+
+      setState(() {
+        attendanceHistory =
+            effective.map((j) => AttendanceRecord.fromJson(j)).toList();
+        isLoadingAttendance = false;
+      });
+
+      debugPrint("✅ Admin attendance loaded: ${attendanceHistory.length} records");
     } catch (e) {
+      debugPrint("❌ Admin Attendance API Parsing Error: $e");
       setState(() {
         attendanceHistory = [];
         isLoadingAttendance = false;
@@ -1690,6 +1777,37 @@ class _AdminDashboardState extends State<AdminDashboard> {
 
   // ==================== SEPARATE DIALOGS FOR EACH SECTION ====================
 
+  /// ✅ Auto-fetch live location for all role-based salesmen
+  Future<void> _autoFetchAllLocations() async {
+    if (salesmenList.isEmpty) return;
+
+    for (final salesman in salesmenList) {
+      // Skip if we already have a usable address
+      if (_isUsableAddress(salesman.address) ||
+          _isUsableAddress(salesman.liveAddress) ||
+          (_geocodedAddresses[salesman.empId] != null &&
+              _isUsableAddress(_geocodedAddresses[salesman.empId]!))) {
+        continue;
+      }
+
+      // If lat/lng exist, reverse geocode them
+      if (salesman.latitude != null &&
+          salesman.longitude != null &&
+          salesman.latitude != 0.0 &&
+          salesman.longitude != 0.0) {
+        try {
+          final addr = await _reverseGeocode(
+              salesman.latitude!, salesman.longitude!);
+          if (mounted) {
+            setState(() {
+              _geocodedAddresses[salesman.empId] = addr;
+            });
+          }
+        } catch (_) {}
+      }
+    }
+  }
+
   void _showLeavesDialog() {
     showDialog(
       context: context,
@@ -1967,6 +2085,42 @@ class _AdminDashboardState extends State<AdminDashboard> {
 
   // ==================== ATTENDANCE DIALOG (FIXED) ====================
 
+  // ==================== ATTENDANCE DIALOG (SALESMAN-STYLE) ====================
+
+  /// Small reusable detail row for the attendance card
+  Widget _buildAttendanceDetailRow(IconData icon, String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 13, color: _AdminPalette.primaryBrown),
+          const SizedBox(width: 6),
+          SizedBox(
+            width: 82,
+            child: Text(
+              "$label:",
+              style: const TextStyle(
+                fontSize: 11,
+                color: Colors.grey,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              (value.isEmpty || value == 'null') ? '--' : value,
+              style: const TextStyle(
+                fontSize: 11,
+                color: _AdminPalette.inkDark,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _showAttendanceDialog() {
     showDialog(
       context: context,
@@ -1978,14 +2132,14 @@ class _AdminDashboardState extends State<AdminDashboard> {
             RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
             backgroundColor: _AdminPalette.bgWarm,
             insetPadding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 24),
             child: ConstrainedBox(
               constraints: BoxConstraints(
-                maxHeight: MediaQuery.of(context).size.height * 0.8,
+                maxHeight: MediaQuery.of(context).size.height * 0.85,
                 maxWidth: MediaQuery.of(context).size.width * 0.95,
               ),
               child: Padding(
-                padding: const EdgeInsets.all(20.0),
+                padding: const EdgeInsets.all(16.0),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -2013,132 +2167,215 @@ class _AdminDashboardState extends State<AdminDashboard> {
                             IconButton(
                               icon: const Icon(Icons.refresh,
                                   color: _AdminPalette.primaryBrown),
-                              onPressed: () {
-                                _fetchAttendanceData(_selectedEmpIdFilter)
-                                    .then((_) {
-                                  setDialogState(() {});
-                                });
+                              onPressed: () async {
+                                await _fetchAttendanceData(_selectedEmpIdFilter);
+                                if (ctx.mounted) setDialogState(() {});
                               },
                               tooltip: "Refresh",
                             ),
                             IconButton(
-                                icon: const Icon(Icons.close),
-                                onPressed: () => Navigator.pop(ctx)),
+                              icon: const Icon(Icons.close),
+                              onPressed: () => Navigator.pop(ctx),
+                            ),
                           ],
                         ),
                       ],
                     ),
-                    const SizedBox(height: 16),
+                    const Divider(),
                     if (isLoadingAttendance)
-                      const Center(
-                        child: Padding(
-                          padding: EdgeInsets.all(32),
-                          child: CircularProgressIndicator(),
-                        ),
+                      const Padding(
+                        padding: EdgeInsets.all(32),
+                        child: Center(child: CircularProgressIndicator()),
                       )
                     else if (attendanceHistory.isEmpty)
-                      const Center(
-                        child: Padding(
-                          padding: EdgeInsets.all(32),
+                      const Padding(
+                        padding: EdgeInsets.all(32),
+                        child: Center(
                           child: Text("No attendance records found.",
                               style: TextStyle(color: Colors.grey)),
                         ),
                       )
                     else
                       Flexible(
-                        child: ListView.separated(
+                        child: ListView.builder(
                           shrinkWrap: true,
                           itemCount: attendanceHistory.length,
-                          separatorBuilder: (_, __) =>
-                          const SizedBox(height: 8),
                           itemBuilder: (context, index) {
-                            final att = attendanceHistory[index];
-                            bool isPunchIn = att.punchType == 'PUNCH_IN';
-                            String empFormattedId =
-                            _formatEmpId(att.empId, att.role);
+                            final item = attendanceHistory[index];
+                            final bool isPunchIn =
+                                item.punchType == 'PUNCH_IN';
 
-                            return Container(
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: Colors.white,
+                            // ✅ Resolve photo URL exactly like Salesman Dashboard
+                            String? displayPhoto;
+                            if (item.photo.isNotEmpty) {
+                              final photos = item.photo
+                                  .split(',')
+                                  .map((p) => p.trim())
+                                  .where((p) => p.isNotEmpty)
+                                  .toList();
+                              if (photos.isNotEmpty) {
+                                displayPhoto = photos.last;
+                              }
+                            }
+                            final String photoUrl = displayPhoto != null
+                                ? (displayPhoto.startsWith('http')
+                                ? displayPhoto
+                                : '$API_BASE_URL$displayPhoto')
+                                : '';
+
+                            final String empFormattedId =
+                            _formatEmpId(item.empId, item.role);
+
+                            return Card(
+                              color: _AdminPalette.cardBg,
+                              margin: const EdgeInsets.symmetric(vertical: 6),
+                              shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(12),
-                                border:
-                                Border.all(color: _AdminPalette.border),
+                                side: BorderSide(
+                                  color: isPunchIn
+                                      ? Colors.green.withOpacity(0.3)
+                                      : Colors.red.withOpacity(0.3),
+                                ),
                               ),
-                              child: Row(
-                                children: [
-                                  CircleAvatar(
-                                    backgroundColor: isPunchIn
-                                        ? Colors.green.shade50
-                                        : Colors.orange.shade50,
-                                    child: Icon(
-                                      isPunchIn
-                                          ? Icons.login
-                                          : Icons.logout,
-                                      color: isPunchIn
-                                          ? Colors.green
-                                          : Colors.orange,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                      CrossAxisAlignment.start,
+                              child: Padding(
+                                padding: const EdgeInsets.all(10),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
                                       children: [
-                                        Row(
-                                          mainAxisAlignment:
-                                          MainAxisAlignment.spaceBetween,
-                                          children: [
-                                            Text(
-                                              att.punchType,
-                                              style: TextStyle(
-                                                fontWeight: FontWeight.bold,
-                                                fontSize: 13,
-                                                color: isPunchIn
-                                                    ? Colors.green.shade800
-                                                    : Colors.orange.shade800,
-                                              ),
-                                            ),
-                                            Container(
-                                              padding:
-                                              const EdgeInsets.symmetric(
-                                                  horizontal: 6,
-                                                  vertical: 2),
-                                              decoration: BoxDecoration(
-                                                color: Colors.grey.shade100,
-                                                borderRadius:
-                                                BorderRadius.circular(4),
-                                              ),
-                                              child: Text(
-                                                empFormattedId,
+                                        CircleAvatar(
+                                          radius: 18,
+                                          backgroundColor: isPunchIn
+                                              ? Colors.green.shade100
+                                              : Colors.red.shade100,
+                                          child: Icon(
+                                            isPunchIn
+                                                ? Icons.login
+                                                : Icons.logout,
+                                            color: isPunchIn
+                                                ? Colors.green
+                                                : Colors.red,
+                                            size: 18,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 10),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                isPunchIn
+                                                    ? "Punch In"
+                                                    : "Punch Out",
                                                 style: const TextStyle(
-                                                  fontSize: 10,
-                                                  fontWeight: FontWeight.bold,
-                                                  color: _AdminPalette
-                                                      .primaryBrown,
-                                                ),
+                                                    fontWeight: FontWeight.bold,
+                                                    fontSize: 14),
                                               ),
+                                              Text(
+                                                "ID: ${item.id.isEmpty ? '-' : item.id} | Emp: ${item.empId.isEmpty ? '-' : item.empId}",
+                                                style: const TextStyle(
+                                                    fontSize: 10,
+                                                    color: Colors.grey),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                        if (photoUrl.isNotEmpty)
+                                          ClipRRect(
+                                            borderRadius:
+                                            BorderRadius.circular(8),
+                                            child: Image.network(
+                                              photoUrl,
+                                              width: 50,
+                                              height: 50,
+                                              fit: BoxFit.cover,
+                                              loadingBuilder: (context, child,
+                                                  progress) {
+                                                if (progress == null)
+                                                  return child;
+                                                return const SizedBox(
+                                                  width: 50,
+                                                  height: 50,
+                                                  child: Center(
+                                                    child:
+                                                    CircularProgressIndicator(
+                                                        strokeWidth: 2),
+                                                  ),
+                                                );
+                                              },
+                                              errorBuilder: (_, __, ___) =>
+                                                  Container(
+                                                    width: 50,
+                                                    height: 50,
+                                                    color:
+                                                    Colors.grey.shade200,
+                                                    child: const Icon(
+                                                        Icons.person,
+                                                        size: 28,
+                                                        color: Colors.grey),
+                                                  ),
                                             ),
-                                          ],
-                                        ),
-                                        const SizedBox(height: 4),
-                                        Text(
-                                          "Time: ${att.punchTime} • Date: ${att.punchDate} (${att.day})",
-                                          style: const TextStyle(
-                                              fontSize: 11,
-                                              color: Colors.black87),
-                                        ),
+                                          ),
                                       ],
                                     ),
-                                  ),
-                                ],
+                                    const SizedBox(height: 8),
+
+                                    // ✅ Detail rows — same as Salesman Dashboard
+                                    _buildAttendanceDetailRow(
+                                      Icons.calendar_today,
+                                      "Date",
+                                      item.punchDate,
+                                    ),
+                                    _buildAttendanceDetailRow(
+                                      Icons.access_time,
+                                      "Time",
+                                      item.punchTime,
+                                    ),
+                                    _buildAttendanceDetailRow(
+                                      Icons.today,
+                                      "Day",
+                                      item.day,
+                                    ),
+                                    _buildAttendanceDetailRow(
+                                      Icons.badge,
+                                      "Role",
+                                      item.role,
+                                    ),
+                                    _buildAttendanceDetailRow(
+                                      Icons.confirmation_number,
+                                      "Emp ID",
+                                      empFormattedId,
+                                    ),
+                                    _buildAttendanceDetailRow(
+                                      Icons.location_on,
+                                      "Address",
+                                      item.address,
+                                    ),
+                                    _buildAttendanceDetailRow(
+                                      Icons.my_location,
+                                      "Latitude",
+                                      item.latitude,
+                                    ),
+                                    _buildAttendanceDetailRow(
+                                      Icons.my_location,
+                                      "Longitude",
+                                      item.longitude,
+                                    ),
+                                    _buildAttendanceDetailRow(
+                                      Icons.update,
+                                      "Updated At",
+                                      item.updatedAt,
+                                    ),
+                                  ],
+                                ),
                               ),
                             );
                           },
                         ),
                       ),
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 8),
                   ],
                 ),
               ),
@@ -4347,7 +4584,10 @@ class _AdminDashboardState extends State<AdminDashboard> {
                             total: attendanceHistory.length,
                             icon: Icons.how_to_reg,
                             color: Colors.blue,
-                            onTap: _showAttendanceDialog,
+                            onTap: () {
+                              _fetchAttendanceData(_selectedEmpIdFilter);
+                              _showAttendanceDialog();
+                            },
                           ),
                         ),
                         const SizedBox(width: 10),
