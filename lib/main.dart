@@ -8,7 +8,8 @@ import 'Admin_Dashboard.dart';
 import 'Log_In.dart';
 import 'Salesman_Dashboard.dart';
 
-const String API_URL = 'https://gray-dragonfly-662322.hostingersite.com/bhadra_foods/login.php';
+// ✅ Use the SAME API endpoint as Log_In.dart so login + auto-login stay consistent
+const String API_URL = 'http://192.168.0.104/bhadra_foods/login.php';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -37,7 +38,8 @@ class MyHomePage extends StatefulWidget {
   State<MyHomePage> createState() => _MyHomePageState();
 }
 
-class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateMixin {
+class _MyHomePageState extends State<MyHomePage>
+    with SingleTickerProviderStateMixin {
   late AnimationController _controller;
   late Animation<double> _fadeAnimation;
   late Animation<double> _scaleAnimation;
@@ -62,64 +64,103 @@ class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateM
 
     _controller.forward();
 
+    // After splash animation, try auto-login
     _navigationTimer = Timer(const Duration(seconds: 3), () {
       _checkAutoLoginWithBackend();
     });
   }
 
+  // ============================================================
+  // ✅ AUTO-LOGIN — Supports Admin + ALL Sales Roles
+  // Reads saved credentials from SharedPreferences, verifies with
+  // login.php, and routes to the correct dashboard.
+  // ============================================================
   Future<void> _checkAutoLoginWithBackend() async {
     final prefs = await SharedPreferences.getInstance();
     final bool isLoggedIn = prefs.getBool('isLoggedIn') ?? false;
-    final String savedUsername = prefs.getString('name') ?? '';
+
+    // ✅ Saved credential keys (must match what Log_In.dart stores)
+    final String savedUsername = prefs.getString('username') ?? '';
     final String savedPassword = prefs.getString('password') ?? '';
-    final String savedRole = prefs.getString('role') ?? '';
+    final String savedRole     = prefs.getString('role')     ?? '';
 
     Widget targetScreen = const Login();
 
+    // Only attempt verification when all saved fields exist
     if (isLoggedIn &&
         savedUsername.isNotEmpty &&
         savedPassword.isNotEmpty &&
         savedRole.isNotEmpty) {
       try {
-        final response = await http.post(
+        final response = await http
+            .post(
           Uri.parse(API_URL),
-          headers: {'Content-Type': 'application/json'},
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+          },
           body: jsonEncode({
-            'name': savedUsername, // this can be email, mobile, or emp_id
+            // ✅ MUST use 'username' key — login.php reads $data['username']
+            'username': savedUsername,
             'password': savedPassword,
-            'role': savedRole,
+            'role':     savedRole,
           }),
-        );
+        )
+            .timeout(const Duration(seconds: 15));
 
         if (response.statusCode == 200) {
           final data = jsonDecode(response.body);
 
           if (data['status'] == 'success' && data['user'] != null) {
             final user = data['user'];
-            String role = user['role'] ?? savedRole;
-            String empId = user['emp_id']?.toString() ?? '';
-            String name = user['name'] ?? '';
-            String email = user['email'] ?? '';
 
-            // Refresh stored details
-            await prefs.setString('emp_id', empId);
-            await prefs.setString('name', name);
-            await prefs.setString('email', email);
-            await prefs.setString('role', role);
+            final String role  = user['role']?.toString()      ?? savedRole;
+            final String empId = user['emp_id']?.toString()    ?? '';
+            final String name  = user['name']?.toString()      ?? '';
+            final String email = user['email']?.toString()     ?? '';
+            final String mobile= user['mobile']?.toString()    ?? '';
+
+            // ✅ Refresh stored details so next launch stays in sync
+            await prefs.setString('emp_id',   empId);
+            await prefs.setString('name',     name);
+            await prefs.setString('email',    email);
+            await prefs.setString('mobile',   mobile);
+            await prefs.setString('role',     role);
+            await prefs.setString('username', savedUsername);
+            await prefs.setString('password', savedPassword);
             await prefs.setBool('isLoggedIn', true);
 
-            if (role.toLowerCase() == 'admin') {
+            // ✅ Route based on returned role — handles BOTH
+            //    long-form (Admin) and short-form (ASM/RSM/ZSM)
+            final String normalizedRole = role.toLowerCase().trim();
+
+            if (normalizedRole == 'admin') {
+              // ---- ADMIN ----
               targetScreen = const AdminDashboard();
-            } else {
+            } else if (normalizedRole == 'salesman' ||
+                normalizedRole == 'sales officer' ||
+                normalizedRole == 'asm' ||
+                normalizedRole == 'rsm' ||
+                normalizedRole == 'zsm' ||
+                normalizedRole == 'area sales manager' ||
+                normalizedRole == 'regional sales manager' ||
+                normalizedRole == 'zone wise sales manager' ||
+                normalizedRole == 'sales head') {
+              // ---- ALL SALES ROLES ----
               targetScreen = DashboardScreen(
                 loggedInRole: role,
                 loggedInUserId: empId,
                 loggedInUserName: name,
                 email: email,
+                mobile: mobile,
               );
+            } else {
+              // Unknown role → force fresh login
+              await prefs.clear();
+              targetScreen = const Login();
             }
           } else {
-            // Clear only login flag, keep nothing
+            // Invalid session → clear & go to login
             await prefs.clear();
             targetScreen = const Login();
           }
@@ -179,10 +220,12 @@ class _MyHomePageState extends State<MyHomePage> with SingleTickerProviderStateM
                       padding: const EdgeInsets.all(4),
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
-                        border: Border.all(color: const Color(0xFFD4AF37), width: 2),
+                        border: Border.all(
+                            color: const Color(0xFFD4AF37), width: 2),
                         boxShadow: [
                           BoxShadow(
-                            color: const Color(0xFFD4AF37).withOpacity(0.3),
+                            color:
+                            const Color(0xFFD4AF37).withOpacity(0.3),
                             blurRadius: 25,
                             spreadRadius: 5,
                           ),
