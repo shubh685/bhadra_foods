@@ -25,7 +25,7 @@ class ResetPwd extends StatefulWidget {
 
 class _ResetPwdState extends State<ResetPwd> with SingleTickerProviderStateMixin {
   // Update this URL to point to your hosted server instance
-  static const String apiUrl = "http://10.249.124.78/bhadra_foods/forgot_pwd.php";
+  static const String apiUrl = "https://gray-dragonfly-662322.hostingersite.com/forgot_pwd.php";
 
   bool isEmailVerified = false;
   bool isOtpSubmitted = false;

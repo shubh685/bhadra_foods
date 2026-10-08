@@ -18,7 +18,7 @@ import 'dart:io' show File, Platform;
 import 'Log_In.dart';
 
 // API Base URL
-const String API_BASE_URL = 'http://10.249.124.78/bhadra_foods/';
+const String API_BASE_URL = 'https://gray-dragonfly-662322.hostingersite.com/bhadra_foods/';
 
 class _AdminPalette {
   static const darkHeaderTop = Color(0xFF381C00);

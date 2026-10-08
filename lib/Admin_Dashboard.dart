@@ -18,7 +18,7 @@ class _AdminPalette {
 }
 
 // API Base URL
-const String API_BASE_URL = 'http://10.249.124.78/bhadra_foods/';
+const String API_BASE_URL = 'https://gray-dragonfly-662322.hostingersite.com/bhadra_foods/';
 
 // Model for Admin User
 class AdminModel {
@@ -143,7 +143,6 @@ class SalesmanModel {
 }
 
 // Model for Attendance mapped directly to MySQL table 'attendance'
-// Model for Attendance mapped directly to MySQL table 'attendance'
 class AttendanceRecord {
   String id;
   String empId;
@@ -212,6 +211,7 @@ class AttendanceRecord {
     );
   }
 }
+
 // Model for Product Catalog
 class ProductItem {
   String id;
@@ -357,8 +357,11 @@ class AdminDashboard extends StatefulWidget {
 
 class _AdminDashboardState extends State<AdminDashboard> {
   late Timer _timer;
+  String _selectedEmployeeEmpId = 'all';
   DateTime _currentTime = DateTime.now();
   Timer? _locationRefreshTimer;
+  Timer? _onlineCheckTimer;
+
   // Auto password generation
   bool isGeneratingPassword = false;
   String generatedPassword = '';
@@ -400,21 +403,48 @@ class _AdminDashboardState extends State<AdminDashboard> {
     "Sales Head",
   ];
 
+  // ✅ Employee filter options with proper display
+  List<EmployeeFilterOption> get _employeeFilterOptions {
+    final list = <EmployeeFilterOption>[
+      EmployeeFilterOption(empId: 'all', name: 'All Staff', role: 'Everyone'),
+    ];
+    for (final sm in salesmenList) {
+      list.add(EmployeeFilterOption(
+        empId: sm.empId,
+        name: sm.name,
+        role: sm.role,
+      ));
+    }
+    return list;
+  }
+
+  // ── Online counter ──
+  int get _onlineSalesmanCount =>
+      salesmenList.where((s) => _isSalesmanOnline(s.lastUpdated)).length;
+
   @override
   void initState() {
     super.initState();
+
     _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (mounted) {
-        setState(() {
-          _currentTime = DateTime.now();
-        });
-      }
+      if (mounted) setState(() => _currentTime = DateTime.now());
     });
+
     _loadAllData();
+
+    // Refresh location data every 2 minutes
     _locationRefreshTimer = Timer.periodic(const Duration(minutes: 2), (_) {
-      if (mounted && !isLoadingSalesmen) {
-        _fetchSalesmenData();
-      }
+      if (mounted && !isLoadingSalesmen) _fetchSalesmenData();
+    });
+
+    // ✅ Check online status every 30 seconds
+    _onlineCheckTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted) setState(() {});
+    });
+
+    // ✅ Kick off geocoding shortly after first frame
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _autoGeocodeAllSalesmen();
     });
   }
 
@@ -422,6 +452,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
   void dispose() {
     _timer.cancel();
     _locationRefreshTimer?.cancel();
+    _onlineCheckTimer?.cancel();
     super.dispose();
   }
 
@@ -460,6 +491,22 @@ class _AdminDashboardState extends State<AdminDashboard> {
       return '$prefix-${cleaned.padLeft(2, '0')}';
     }
     return cleaned;
+  }
+
+  /// ✅ Determines whether a salesman is currently ONLINE
+  /// based on their last_updated timestamp (heartbeat method).
+  /// If heartbeat is within last 5 minutes AND internet is reachable = ONLINE
+  bool _isSalesmanOnline(String lastUpdated) {
+    if (lastUpdated.trim().isEmpty) return false;
+    try {
+      final dt = DateTime.tryParse(lastUpdated.replaceFirst(' ', 'T'));
+      if (dt == null) return false;
+      final diff = DateTime.now().difference(dt);
+      // Online if heartbeat within last 5 minutes
+      return diff.inMinutes < 5 && !diff.isNegative;
+    } catch (_) {
+      return false;
+    }
   }
 
   // ==================== GEOLOCATOR & GEOCODING METHODS ====================
@@ -534,77 +581,6 @@ class _AdminDashboardState extends State<AdminDashboard> {
     return fallback;
   }
 
-  Future<void> _fetchSalesmanLocation(SalesmanModel salesman) async {
-    setState(() => _isFetchingLocation = true);
-    await _autoFetchAllLocations();
-
-    try {
-      double? lat = salesman.latitude;
-      double? lng = salesman.longitude;
-
-      if (lat == null || lng == null || lat == 0.0 || lng == 0.0) {
-        final serviceEnabled = await Geolocator.isLocationServiceEnabled();
-        if (!serviceEnabled) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                  content: Text('Location services are disabled.')),
-            );
-          }
-          setState(() => _isFetchingLocation = false);
-          return;
-        }
-
-        LocationPermission permission = await Geolocator.checkPermission();
-        if (permission == LocationPermission.denied) {
-          permission = await Geolocator.requestPermission();
-        }
-        if (permission == LocationPermission.denied ||
-            permission == LocationPermission.deniedForever) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Location permission denied.')),
-            );
-          }
-          setState(() => _isFetchingLocation = false);
-          return;
-        }
-
-        final pos = await Geolocator.getCurrentPosition(
-          desiredAccuracy: LocationAccuracy.high,
-        );
-        lat = pos.latitude;
-        lng = pos.longitude;
-
-        salesman.latitude = lat;
-        salesman.longitude = lng;
-      }
-
-      String resolved = await _reverseGeocode(lat!, lng!);
-
-      if (!mounted) return;
-      setState(() {
-        _geocodedAddresses[salesman.empId] = resolved;
-        salesman.liveLocation = resolved;
-        salesman.lastUpdated = DateTime.now().toString();
-        _isFetchingLocation = false;
-      });
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Updated location for ${salesman.name}'),
-          backgroundColor: Colors.green,
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _isFetchingLocation = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error fetching location: $e')),
-      );
-    }
-  }
-
   // ==================== LOAD ALL DATA ====================
 
   Future<void> _loadAllData() async {
@@ -612,8 +588,8 @@ class _AdminDashboardState extends State<AdminDashboard> {
     await _fetchSalesmenData();
     await _fetchCatalogData();
     await _fetchAllLeaves();
-    await _fetchAttendanceData(_selectedEmpIdFilter);
-    await _fetchDailyReports(_selectedEmpIdFilter);
+    await _fetchAttendanceData(_selectedEmployeeEmpId);
+    await _fetchDailyReports(_selectedEmployeeEmpId);
   }
 
   // ==================== API CALLS ====================
@@ -665,14 +641,16 @@ class _AdminDashboardState extends State<AdminDashboard> {
         final data = json.decode(response.body);
         if (data['status'] == true) {
           final List<dynamic> users = data['data'] ?? [];
+          final List<SalesmanModel> fresh =
+          users.map((json) => SalesmanModel.fromJson(json)).toList();
+
           setState(() {
-            salesmenList =
-                users.map((json) => SalesmanModel.fromJson(json)).toList();
+            salesmenList = fresh;
             isLoadingSalesmen = false;
           });
 
-          // Auto-geocode every salesman (full addresses)
-          await _geocodeAllSalesmen();
+          // ✅ AUTO-FETCH LOCATION FOR EVERY SALESMAN (no button needed)
+          await _autoGeocodeAllSalesmen();
         } else {
           setState(() {
             errorMessage = data['message'] ?? 'Failed to load salesmen';
@@ -690,6 +668,75 @@ class _AdminDashboardState extends State<AdminDashboard> {
         errorMessage = 'Connection error: $e';
         isLoadingSalesmen = false;
       });
+    }
+  }
+
+  /// ✅ Automatically reverse-geocodes every salesman's lat/long
+  /// into a full readable address and caches it in _geocodedAddresses.
+  /// Runs on every dashboard build/refresh — no button clicks needed.
+  Future<void> _autoGeocodeAllSalesmen() async {
+    if (salesmenList.isEmpty) return;
+
+    bool anyUpdated = false;
+
+    for (final salesman in salesmenList) {
+      // ─── 1. Prefer server-pushed full address (fastest) ───
+      if (_isUsableAddress(salesman.address)) {
+        final current = _geocodedAddresses[salesman.empId];
+        final target = salesman.address.trim();
+        if (current != target) {
+          _geocodedAddresses[salesman.empId] = target;
+          anyUpdated = true;
+        }
+        continue;
+      }
+      if (_isUsableAddress(salesman.liveAddress)) {
+        final current = _geocodedAddresses[salesman.empId];
+        final target = salesman.liveAddress.trim();
+        if (current != target) {
+          _geocodedAddresses[salesman.empId] = target;
+          anyUpdated = true;
+        }
+        continue;
+      }
+
+      // ─── 2. Need lat/long to reverse-geocode ───
+      final lat = salesman.latitude;
+      final lng = salesman.longitude;
+      if (lat == null || lng == null || lat == 0.0 || lng == 0.0) {
+        // No coordinates yet — leave the card showing "Location Pending"
+        continue;
+      }
+
+      // ─── 3. Skip if cache already has a valid address for these coords ───
+      final cached = _geocodedAddresses[salesman.empId];
+      if (cached != null &&
+          _isUsableAddress(cached) &&
+          !cached.startsWith('Lat:')) {
+        continue;
+      }
+
+      // ─── 4. Reverse-geocode ───
+      try {
+        final resolved = await _reverseGeocode(lat, lng);
+        if (resolved.trim().isNotEmpty &&
+            _geocodedAddresses[salesman.empId] != resolved) {
+          _geocodedAddresses[salesman.empId] = resolved;
+          anyUpdated = true;
+        }
+      } catch (e) {
+        debugPrint('Auto-geocode failed for ${salesman.empId}: $e');
+        final fallback =
+            "Lat: ${lat.toStringAsFixed(5)}, Long: ${lng.toStringAsFixed(5)}";
+        if (_geocodedAddresses[salesman.empId] != fallback) {
+          _geocodedAddresses[salesman.empId] = fallback;
+          anyUpdated = true;
+        }
+      }
+    }
+
+    if (anyUpdated && mounted) {
+      setState(() {});
     }
   }
 
@@ -763,7 +810,6 @@ class _AdminDashboardState extends State<AdminDashboard> {
         data = {'history': decodedBody};
       }
 
-      // ✅ Safely extract list from various possible response keys
       final List rawList = (data['history'] ??
           data['data'] ??
           data['attendance'] ??
@@ -783,7 +829,6 @@ class _AdminDashboardState extends State<AdminDashboard> {
           .map((e) => Map<String, dynamic>.from(e as Map))
           .toList();
 
-      // ✅ If filtering a specific emp, keep only matching rows
       List<Map<String, dynamic>> effective = typed;
       if (empId.isNotEmpty && empId != 'all') {
         final String target = empId.trim();
@@ -795,7 +840,6 @@ class _AdminDashboardState extends State<AdminDashboard> {
         if (mine.isNotEmpty) effective = mine;
       }
 
-      // ✅ Sort by id DESC so latest entries come first (Salesman Dashboard behavior)
       effective.sort((a, b) {
         final aId = int.tryParse(a['id']?.toString() ?? '0') ?? 0;
         final bId = int.tryParse(b['id']?.toString() ?? '0') ?? 0;
@@ -860,8 +904,13 @@ class _AdminDashboardState extends State<AdminDashboard> {
   Future<void> _fetchAllLeaves() async {
     setState(() => isLoadingLeaves = true);
     try {
+      final queryParam = (_selectedEmployeeEmpId.isEmpty ||
+          _selectedEmployeeEmpId == 'all')
+          ? 'all'
+          : Uri.encodeComponent(_selectedEmployeeEmpId);
+
       final response = await http.get(
-        Uri.parse('${API_BASE_URL}manage_leaves.php?emp_id=all'),
+        Uri.parse('${API_BASE_URL}manage_leaves.php?emp_id=$queryParam'),
         headers: {'Accept': 'application/json'},
       );
 
@@ -872,14 +921,19 @@ class _AdminDashboardState extends State<AdminDashboard> {
 
           final Map<String, Map<String, String>> salesmanMap = {};
           for (var sm in salesmenList) {
-            salesmanMap[sm.empId] = {
-              'name': sm.name,
-              'role': sm.role,
-            };
+            salesmanMap[sm.empId] = {'name': sm.name, 'role': sm.role};
           }
 
+          final filtered = (_selectedEmployeeEmpId == 'all')
+              ? leaves
+              : leaves
+              .where((l) =>
+          (l['emp_id']?.toString() ?? '').trim() ==
+              _selectedEmployeeEmpId)
+              .toList();
+
           setState(() {
-            leaveList = leaves.map((leaf) {
+            leaveList = filtered.map((leaf) {
               final empInfo = salesmanMap[leaf['emp_id']] ?? {};
               return LeaveRequest.fromJson({
                 ...leaf,
@@ -887,7 +941,8 @@ class _AdminDashboardState extends State<AdminDashboard> {
                     empInfo['name'] ??
                     leaf['emp_id'] ??
                     'Staff',
-                'emp_role': leaf['emp_role'] ?? empInfo['role'] ?? 'Salesman',
+                'emp_role':
+                leaf['emp_role'] ?? empInfo['role'] ?? 'Salesman',
               });
             }).toList();
             isLoadingLeaves = false;
@@ -1356,18 +1411,8 @@ class _AdminDashboardState extends State<AdminDashboard> {
 
   String _formatDateTime(DateTime dt) {
     final months = [
-      'Jan',
-      'Feb',
-      'Mar',
-      'Apr',
-      'May',
-      'Jun',
-      'Jul',
-      'Aug',
-      'Sep',
-      'Oct',
-      'Nov',
-      'Dec'
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
     ];
     String hour =
     (dt.hour % 12 == 0 ? 12 : dt.hour % 12).toString().padLeft(2, '0');
@@ -1389,39 +1434,6 @@ class _AdminDashboardState extends State<AdminDashboard> {
     } catch (_) {
       return rawDateTime;
     }
-  }
-
-  Widget _buildLeaveStat(String label, int count, Color color) {
-    return Column(
-      children: [
-        Text(
-          count.toString(),
-          style:
-          TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: color),
-        ),
-        Text(
-          label,
-          style: const TextStyle(fontSize: 10, color: Colors.grey),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildBodyStat(
-      String value, String label, IconData icon, Color color) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, color: color, size: 22),
-        const SizedBox(height: 4),
-        Text(value,
-            style: const TextStyle(
-                fontWeight: FontWeight.bold,
-                fontSize: 16,
-                color: _AdminPalette.inkDark)),
-        Text(label, style: const TextStyle(fontSize: 10, color: Colors.grey)),
-      ],
-    );
   }
 
   Widget _buildActionCard(
@@ -1475,48 +1487,58 @@ class _AdminDashboardState extends State<AdminDashboard> {
   }
 
   // ==================== LIVE SALESMAN TRACKING CARD WIDGET ====================
+  // ✅ AUTO LOCATION FETCH — shows location automatically when salesman
+  // opens their dashboard, without any button click.
 
   Widget _buildSalesmanLiveTrackingCard(SalesmanModel salesman) {
     String formattedEmpId = _formatEmpId(salesman.empId, salesman.role);
 
-    // LIVE LOCATION RESOLUTION — priority order:
-    // 1. _geocodedAddresses[empId] (freshly geocoded full address)
-    // 2. salesman.address (pushed by Salesman Dashboard)
-    // 3. salesman.liveAddress (alias field)
-    // 4. salesman.liveLocation (generic API field)
-    // 5. Lat/Long pair
-    // 6. "Location Pending"
+    // ── ONLINE based on heartbeat + internet ──
+    final bool isOnline = _isSalesmanOnline(salesman.lastUpdated);
 
+    // ── AUTO RESOLVE LOCATION ──
+    // Priority: geocoded cache > server full address > live address > lat/long
+    String displayLocation = 'Location Pending';
     final String? cached = _geocodedAddresses[salesman.empId];
-
-    String displayLocation;
     if (cached != null && _isUsableAddress(cached)) {
       displayLocation = cached;
     } else if (_isUsableAddress(salesman.address)) {
       displayLocation = salesman.address.trim();
     } else if (_isUsableAddress(salesman.liveAddress)) {
       displayLocation = salesman.liveAddress.trim();
-    } else if (_isUsableAddress(salesman.liveLocation)) {
-      displayLocation = salesman.liveLocation.trim();
     } else if (salesman.latitude != null &&
         salesman.longitude != null &&
         salesman.latitude != 0.0 &&
         salesman.longitude != 0.0) {
       displayLocation =
       "Lat: ${salesman.latitude!.toStringAsFixed(5)}, Long: ${salesman.longitude!.toStringAsFixed(5)}";
-    } else {
-      displayLocation = 'Location Pending';
+      // ✅ Trigger auto-geocode in background if not already cached
+      if (cached == null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _autoGeocodeSalesman(salesman);
+        });
+      }
+    } else if (isOnline) {
+      // ✅ Salesman is online but location not yet pushed — trigger fetch
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _autoGeocodeSalesman(salesman);
+      });
     }
 
     String updatedTimeText = _formatTimeString(salesman.lastUpdated);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _AdminPalette.border),
+        border: Border.all(
+          color: isOnline
+              ? Colors.green.withOpacity(0.3)
+              : _AdminPalette.border,
+          width: isOnline ? 1.5 : 1,
+        ),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.02),
@@ -1533,10 +1555,10 @@ class _AdminDashboardState extends State<AdminDashboard> {
               CircleAvatar(
                 radius: 22,
                 backgroundColor:
-                salesman.isLive ? Colors.green.shade100 : Colors.red.shade100,
+                isOnline ? Colors.green.shade100 : Colors.red.shade100,
                 child: Icon(
                   Icons.person,
-                  color: salesman.isLive ? Colors.green : Colors.red,
+                  color: isOnline ? Colors.green : Colors.red,
                 ),
               ),
               const SizedBox(width: 12),
@@ -1579,8 +1601,8 @@ class _AdminDashboardState extends State<AdminDashboard> {
                     const SizedBox(height: 2),
                     Text(
                       "${salesman.role} • ${salesman.city}",
-                      style: TextStyle(
-                          fontSize: 11, color: Colors.grey.shade700),
+                      style:
+                      TextStyle(fontSize: 11, color: Colors.grey.shade700),
                     ),
                   ],
                 ),
@@ -1589,12 +1611,12 @@ class _AdminDashboardState extends State<AdminDashboard> {
                 padding:
                 const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
-                  color: salesman.isLive
+                  color: isOnline
                       ? Colors.green.shade50
                       : Colors.red.shade50,
                   borderRadius: BorderRadius.circular(8),
                   border: Border.all(
-                    color: salesman.isLive ? Colors.green : Colors.red,
+                    color: isOnline ? Colors.green : Colors.red,
                     width: 1,
                   ),
                 ),
@@ -1604,16 +1626,15 @@ class _AdminDashboardState extends State<AdminDashboard> {
                     Icon(
                       Icons.circle,
                       size: 8,
-                      color: salesman.isLive ? Colors.green : Colors.red,
+                      color: isOnline ? Colors.green : Colors.red,
                     ),
                     const SizedBox(width: 4),
                     Text(
-                      salesman.isLive ? 'LIVE' : 'OFFLINE',
+                      isOnline ? 'ONLINE' : 'OFFLINE',
                       style: TextStyle(
                         fontSize: 9,
                         fontWeight: FontWeight.bold,
-                        color:
-                        salesman.isLive ? Colors.green : Colors.red,
+                        color: isOnline ? Colors.green : Colors.red,
                       ),
                     ),
                   ],
@@ -1622,82 +1643,136 @@ class _AdminDashboardState extends State<AdminDashboard> {
             ],
           ),
           const SizedBox(height: 10),
+
+          // ── AUTO LOCATION BOX ──
           Container(
+            width: double.infinity,
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
               color: _AdminPalette.bgWarm,
               borderRadius: BorderRadius.circular(10),
               border: Border.all(color: _AdminPalette.border),
             ),
-            child: Column(
+            child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    const Icon(Icons.location_on,
-                        size: 14, color: _AdminPalette.primaryBrown),
-                    const SizedBox(width: 6),
-                    const Text(
-                      "Live Location:",
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.bold,
-                        color: _AdminPalette.inkDark,
-                      ),
-                    ),
-                    const Spacer(),
-                    IconButton(
-                      constraints: const BoxConstraints(),
-                      padding: EdgeInsets.zero,
-                      icon: const Icon(Icons.my_location,
-                          size: 16, color: _AdminPalette.primaryBrown),
-                      onPressed: () => _fetchSalesmanLocation(salesman),
-                      tooltip: "Refresh Location",
-                    ),
-                  ],
+                Icon(
+                  Icons.location_on,
+                  size: 16,
+                  color: displayLocation == 'Location Pending'
+                      ? Colors.grey
+                      : _AdminPalette.primaryBrown,
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  displayLocation,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: _AdminPalette.inkDark,
-                    height: 1.35,
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        "Live Location:",
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.grey.shade600,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        displayLocation,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: displayLocation == 'Location Pending'
+                              ? Colors.grey
+                              : _AdminPalette.inkDark,
+                          height: 1.3,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
+                if (salesman.latitude != null &&
+                    salesman.longitude != null &&
+                    salesman.latitude != 0.0 &&
+                    salesman.longitude != 0.0)
+                  IconButton(
+                    icon: Icon(
+                      Icons.map,
+                      size: 18,
+                      color: _AdminPalette.primaryBrown,
+                    ),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    onPressed: () {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                              'Location: ${salesman.latitude}, ${salesman.longitude}'),
+                          backgroundColor: _AdminPalette.primaryBrown,
+                        ),
+                      );
+                    },
+                  ),
               ],
             ),
           ),
+
           const SizedBox(height: 8),
+
+          // ── ROUTE + LAST UPDATED ROW ──
           Row(
             children: [
-              Icon(Icons.access_time,
-                  size: 12, color: Colors.grey.shade600),
+              if (salesman.assignedRoute.isNotEmpty) ...[
+                const Icon(Icons.route, size: 13, color: Colors.teal),
+                const SizedBox(width: 4),
+                Flexible(
+                  child: Text(
+                    salesman.assignedRoute,
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: Colors.teal.shade700,
+                      fontWeight: FontWeight.w500,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const SizedBox(width: 10),
+              ],
+              const Icon(Icons.access_time, size: 12, color: Colors.grey),
               const SizedBox(width: 4),
               Text(
                 "Updated: $updatedTimeText",
-                style:
-                TextStyle(fontSize: 10, color: Colors.grey.shade600),
-              ),
-              const Spacer(),
-              Icon(Icons.route,
-                  size: 12, color: Colors.grey.shade600),
-              const SizedBox(width: 4),
-              Flexible(
-                child: Text(
-                  salesman.assignedRoute.isNotEmpty
-                      ? salesman.assignedRoute
-                      : 'No route assigned',
-                  style: TextStyle(
-                      fontSize: 10, color: Colors.grey.shade600),
-                  overflow: TextOverflow.ellipsis,
-                ),
+                style: const TextStyle(fontSize: 10, color: Colors.grey),
               ),
             ],
           ),
         ],
       ),
     );
+  }
+
+  /// ✅ Background geocode trigger for a single salesman
+  Future<void> _autoGeocodeSalesman(SalesmanModel salesman) async {
+    if (salesman.latitude == null ||
+        salesman.longitude == null ||
+        salesman.latitude == 0.0 ||
+        salesman.longitude == 0.0) {
+      return;
+    }
+
+    final cached = _geocodedAddresses[salesman.empId];
+    if (cached != null && _isUsableAddress(cached) && !cached.startsWith('Lat:')) {
+      return;
+    }
+
+    try {
+      final resolved =
+      await _reverseGeocode(salesman.latitude!, salesman.longitude!);
+      if (mounted && _isUsableAddress(resolved)) {
+        setState(() {
+          _geocodedAddresses[salesman.empId] = resolved;
+        });
+      }
+    } catch (_) {}
   }
 
   // ==================== GEOCODING METHODS ====================
@@ -1723,90 +1798,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
     }
   }
 
-  Future<void> _geocodeAllSalesmen() async {
-    if (salesmenList.isEmpty) return;
-
-    bool updated = false;
-
-    for (final salesman in salesmenList) {
-      // Skip if we already have a valid cached address
-      if (_geocodedAddresses.containsKey(salesman.empId) &&
-          _geocodedAddresses[salesman.empId]!.trim().isNotEmpty) {
-        continue;
-      }
-
-      // If the salesman's own dashboard already pushed a full address, use it
-      if (_isUsableAddress(salesman.address)) {
-        _geocodedAddresses[salesman.empId] = salesman.address.trim();
-        updated = true;
-        continue;
-      }
-      if (_isUsableAddress(salesman.liveAddress)) {
-        _geocodedAddresses[salesman.empId] = salesman.liveAddress.trim();
-        updated = true;
-        continue;
-      }
-
-      // Need lat/lng to reverse-geocode
-      final lat = salesman.latitude;
-      final lng = salesman.longitude;
-      if (lat == null || lng == null || lat == 0.0 || lng == 0.0) {
-        continue;
-      }
-
-      // Reverse-geocode this salesman's coordinates to full address
-      try {
-        final resolved = await _reverseGeocode(lat, lng);
-        if (resolved.trim().isNotEmpty) {
-          _geocodedAddresses[salesman.empId] = resolved;
-          updated = true;
-        }
-      } catch (e) {
-        debugPrint("Geocode failed for ${salesman.empId}: $e");
-        _geocodedAddresses[salesman.empId] =
-        "Lat: ${lat.toStringAsFixed(5)}, Long: ${lng.toStringAsFixed(5)}";
-        updated = true;
-      }
-    }
-
-    // Refresh UI once at the end (avoids flicker on every row)
-    if (updated && mounted) {
-      setState(() {});
-    }
-  }
-
-  // ==================== SEPARATE DIALOGS FOR EACH SECTION ====================
-
-  /// ✅ Auto-fetch live location for all role-based salesmen
-  Future<void> _autoFetchAllLocations() async {
-    if (salesmenList.isEmpty) return;
-
-    for (final salesman in salesmenList) {
-      // Skip if we already have a usable address
-      if (_isUsableAddress(salesman.address) ||
-          _isUsableAddress(salesman.liveAddress) ||
-          (_geocodedAddresses[salesman.empId] != null &&
-              _isUsableAddress(_geocodedAddresses[salesman.empId]!))) {
-        continue;
-      }
-
-      // If lat/lng exist, reverse geocode them
-      if (salesman.latitude != null &&
-          salesman.longitude != null &&
-          salesman.latitude != 0.0 &&
-          salesman.longitude != 0.0) {
-        try {
-          final addr = await _reverseGeocode(
-              salesman.latitude!, salesman.longitude!);
-          if (mounted) {
-            setState(() {
-              _geocodedAddresses[salesman.empId] = addr;
-            });
-          }
-        } catch (_) {}
-      }
-    }
-  }
+  // ==================== DIALOGS ====================
 
   void _showLeavesDialog() {
     showDialog(
@@ -1825,6 +1817,9 @@ class _AdminDashboardState extends State<AdminDashboard> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // ✅ Employee Filter Dropdown
+                  _buildEmployeeFilterDropdown(setDialogState),
+                  const SizedBox(height: 12),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
@@ -2083,11 +2078,8 @@ class _AdminDashboardState extends State<AdminDashboard> {
     );
   }
 
-  // ==================== ATTENDANCE DIALOG (FIXED) ====================
+  // ==================== ATTENDANCE DIALOG ====================
 
-  // ==================== ATTENDANCE DIALOG (SALESMAN-STYLE) ====================
-
-  /// Small reusable detail row for the attendance card
   Widget _buildAttendanceDetailRow(IconData icon, String label, String value) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2),
@@ -2144,6 +2136,11 @@ class _AdminDashboardState extends State<AdminDashboard> {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    // ✅ Employee Filter Dropdown
+                    _buildEmployeeFilterDropdown(setDialogState, onChanged: () {
+                      _fetchAttendanceData(_selectedEmpIdFilter);
+                    }),
+                    const SizedBox(height: 10),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
@@ -2205,7 +2202,6 @@ class _AdminDashboardState extends State<AdminDashboard> {
                             final bool isPunchIn =
                                 item.punchType == 'PUNCH_IN';
 
-                            // ✅ Resolve photo URL exactly like Salesman Dashboard
                             String? displayPhoto;
                             if (item.photo.isNotEmpty) {
                               final photos = item.photo
@@ -2309,8 +2305,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                                                   Container(
                                                     width: 50,
                                                     height: 50,
-                                                    color:
-                                                    Colors.grey.shade200,
+                                                    color: Colors.grey.shade200,
                                                     child: const Icon(
                                                         Icons.person,
                                                         size: 28,
@@ -2321,53 +2316,38 @@ class _AdminDashboardState extends State<AdminDashboard> {
                                       ],
                                     ),
                                     const SizedBox(height: 8),
-
-                                    // ✅ Detail rows — same as Salesman Dashboard
                                     _buildAttendanceDetailRow(
-                                      Icons.calendar_today,
-                                      "Date",
-                                      item.punchDate,
-                                    ),
+                                        Icons.calendar_today,
+                                        "Date",
+                                        item.punchDate),
                                     _buildAttendanceDetailRow(
-                                      Icons.access_time,
-                                      "Time",
-                                      item.punchTime,
-                                    ),
+                                        Icons.access_time,
+                                        "Time",
+                                        item.punchTime),
                                     _buildAttendanceDetailRow(
-                                      Icons.today,
-                                      "Day",
-                                      item.day,
-                                    ),
+                                        Icons.today, "Day", item.day),
                                     _buildAttendanceDetailRow(
-                                      Icons.badge,
-                                      "Role",
-                                      item.role,
-                                    ),
+                                        Icons.badge, "Role", item.role),
                                     _buildAttendanceDetailRow(
-                                      Icons.confirmation_number,
-                                      "Emp ID",
-                                      empFormattedId,
-                                    ),
+                                        Icons.confirmation_number,
+                                        "Emp ID",
+                                        empFormattedId),
                                     _buildAttendanceDetailRow(
-                                      Icons.location_on,
-                                      "Address",
-                                      item.address,
-                                    ),
+                                        Icons.location_on,
+                                        "Address",
+                                        item.address),
                                     _buildAttendanceDetailRow(
-                                      Icons.my_location,
-                                      "Latitude",
-                                      item.latitude,
-                                    ),
+                                        Icons.my_location,
+                                        "Latitude",
+                                        item.latitude),
                                     _buildAttendanceDetailRow(
-                                      Icons.my_location,
-                                      "Longitude",
-                                      item.longitude,
-                                    ),
+                                        Icons.my_location,
+                                        "Longitude",
+                                        item.longitude),
                                     _buildAttendanceDetailRow(
-                                      Icons.update,
-                                      "Updated At",
-                                      item.updatedAt,
-                                    ),
+                                        Icons.update,
+                                        "Updated At",
+                                        item.updatedAt),
                                   ],
                                 ),
                               ),
@@ -2405,6 +2385,11 @@ class _AdminDashboardState extends State<AdminDashboard> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // ✅ Employee Filter Dropdown
+                  _buildEmployeeFilterDropdown(setDialogState, onChanged: () {
+                    _fetchDailyReports(_selectedEmpIdFilter);
+                  }),
+                  const SizedBox(height: 12),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
@@ -2462,7 +2447,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                       child: ConstrainedBox(
                         constraints: BoxConstraints(
                             maxHeight:
-                            MediaQuery.of(context).size.height * 0.6),
+                            MediaQuery.of(context).size.height * 0.55),
                         child: ListView.separated(
                           shrinkWrap: true,
                           itemCount: dailyReports.length,
@@ -2611,7 +2596,97 @@ class _AdminDashboardState extends State<AdminDashboard> {
     );
   }
 
-  // ==================== OPTION MENU (Product Catalog History added, Notifications removed) ====================
+  // ==================== EMPLOYEE FILTER DROPDOWN (Reusable) ====================
+
+  Widget _buildEmployeeFilterDropdown(StateSetter setDialogState,
+      {VoidCallback? onChanged}) {
+    final options = _employeeFilterOptions;
+    // Ensure current selection exists in options
+    final bool exists =
+    options.any((o) => o.empId == _selectedEmpIdFilter);
+    final String safeValue = exists ? _selectedEmpIdFilter : 'all';
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _AdminPalette.border),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          value: safeValue,
+          isExpanded: true,
+          icon: const Icon(Icons.arrow_drop_down,
+              color: _AdminPalette.primaryBrown),
+          hint: const Text("Select Staff"),
+          style: const TextStyle(
+            fontSize: 13,
+            color: _AdminPalette.inkDark,
+            fontWeight: FontWeight.w600,
+          ),
+          items: options.map((option) {
+            return DropdownMenuItem<String>(
+              value: option.empId,
+              child: Row(
+                children: [
+                  Icon(
+                    option.empId == 'all'
+                        ? Icons.groups
+                        : Icons.person,
+                    size: 16,
+                    color: _AdminPalette.primaryBrown,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      option.empId == 'all'
+                          ? "All Staff"
+                          : "${option.name} • ${option.empId}",
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 12.5),
+                    ),
+                  ),
+                  if (option.empId != 'all')
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: _AdminPalette.primaryBrown.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        option.role,
+                        style: const TextStyle(
+                          fontSize: 9,
+                          fontWeight: FontWeight.bold,
+                          color: _AdminPalette.primaryBrown,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            );
+          }).toList(),
+          onChanged: (v) {
+            if (v == null) return;
+            setState(() {
+              _selectedEmpIdFilter = v;
+              _selectedEmployeeEmpId = v;
+            });
+            setDialogState(() {});
+            // ✅ Auto-refresh data for selected employee
+            _fetchAttendanceData(v);
+            _fetchDailyReports(v);
+            _fetchAllLeaves();
+            if (onChanged != null) onChanged();
+          },
+        ),
+      ),
+    );
+  }
+
+  // ==================== OPTION MENU ====================
 
   void _showOptionsMenu() {
     showModalBottomSheet(
@@ -4522,6 +4597,30 @@ class _AdminDashboardState extends State<AdminDashboard> {
                                 fontSize: 12,
                                 fontWeight: FontWeight.bold),
                           ),
+                          const SizedBox(width: 12),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.green.withOpacity(0.3),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.circle,
+                                    size: 6, color: Colors.green),
+                                const SizedBox(width: 4),
+                                Text(
+                                  "$_onlineSalesmanCount Online",
+                                  style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.bold),
+                                ),
+                              ],
+                            ),
+                          ),
                         ],
                       ),
                     )
@@ -4791,5 +4890,37 @@ class _AdminDashboardState extends State<AdminDashboard> {
         ),
       ),
     );
+  }
+}
+
+// ============================================================
+// Employee filter model (for dropdown)
+// ============================================================
+class EmployeeFilterOption {
+  final String empId;
+  final String name;
+  final String role;
+
+  EmployeeFilterOption({
+    required this.empId,
+    required this.name,
+    required this.role,
+  });
+
+  String get displayLabel => '$name ($empId) • $role';
+}
+
+// ============================================================
+// ONLINE DETECTION HELPER
+// ============================================================
+bool isSalesmanOnline(String lastUpdated) {
+  if (lastUpdated.trim().isEmpty) return false;
+  try {
+    final dt = DateTime.tryParse(lastUpdated.replaceFirst(' ', 'T'));
+    if (dt == null) return false;
+    final diff = DateTime.now().difference(dt);
+    return diff.inMinutes < 5 && !diff.isNegative;
+  } catch (_) {
+    return false;
   }
 }

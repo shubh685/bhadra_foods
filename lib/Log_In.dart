@@ -42,7 +42,7 @@ class _LoginState extends State<Login> with SingleTickerProviderStateMixin {
   final TextEditingController _passwordController = TextEditingController();
 
   // Update this URL according to your server deployment
-  final String _loginApiUrl = "http://10.249.124.78/bhadra_foods/login.php";
+  final String _loginApiUrl = "https://gray-dragonfly-662322.hostingersite.com/bhadra_foods/login.php";
 
   final List<String> roles = [
     'Admin',
@@ -200,14 +200,18 @@ class _LoginState extends State<Login> with SingleTickerProviderStateMixin {
         }
 
         // ==============================
-        // SALES STAFF NAVIGATION
-        // ==============================
+// SALES STAFF NAVIGATION
+// Accepts both short-form (ASM/RSM/ZSM) and long-form role names
+// ==============================
         else if (actualRole == 'Salesman' ||
             actualRole == 'Sales Officer' ||
+            actualRole == 'ASM' ||
+            actualRole == 'RSM' ||
+            actualRole == 'ZSM' ||
             actualRole == 'Area Sales Manager' ||
             actualRole == 'Regional Sales Manager' ||
             actualRole == 'Zone Wise Sales Manager' ||
-            actualRole == 'Sales Head' ) {
+            actualRole == 'Sales Head') {
           Navigator.pushReplacement(
             context,
             MaterialPageRoute(
@@ -216,7 +220,7 @@ class _LoginState extends State<Login> with SingleTickerProviderStateMixin {
                 loggedInUserId: empId,
                 loggedInUserName: name,
                 email: email,
-                mobile: mobile, // Pass mobile number if your Dashboard accepts it
+                mobile: mobile,
               ),
             ),
           );
