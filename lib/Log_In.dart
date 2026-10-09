@@ -1,14 +1,16 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'package:bhad_foods/Admin_Dashboard.dart';
-import 'package:bhad_foods/Salesman_Dashboard.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
 import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import 'Admin_Dashboard.dart';
+import 'Salesman_Dashboard.dart';
 import 'Forgot_Pwd.dart';
 
 class _Palette {
@@ -41,7 +43,7 @@ class _LoginState extends State<Login> with SingleTickerProviderStateMixin {
   final TextEditingController _usernameController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
 
-  // Update this URL according to your server deployment
+  // Hostinger API URL
   final String _loginApiUrl = "https://gray-dragonfly-662322.hostingersite.com/bhadra_foods/login.php";
 
   final List<String> roles = [
@@ -73,10 +75,9 @@ class _LoginState extends State<Login> with SingleTickerProviderStateMixin {
     super.dispose();
   }
 
-  /// Helper to check internet connection (Web vs Mobile compatible)
   Future<bool> _hasInternetConnection() async {
     if (kIsWeb) {
-      return true; // Web browsers handle network connectivity natively
+      return true;
     } else {
       try {
         final result = await InternetAddress.lookup('google.com');
@@ -87,9 +88,7 @@ class _LoginState extends State<Login> with SingleTickerProviderStateMixin {
     }
   }
 
-  /// Mobile / Email Input Validator
   bool _isValidUsername(String username) {
-    // Check if input is a valid Email OR a valid Mobile Number (10+ digits)
     final emailRegExp = RegExp(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$");
     final mobileRegExp = RegExp(r"^[0-9]{10,12}$");
 
@@ -97,7 +96,6 @@ class _LoginState extends State<Login> with SingleTickerProviderStateMixin {
   }
 
   Future<void> _handleLogin() async {
-    // 1. Internet validation
     bool isConnected = await _hasInternetConnection();
 
     if (!isConnected) {
@@ -108,7 +106,6 @@ class _LoginState extends State<Login> with SingleTickerProviderStateMixin {
       return;
     }
 
-    // 2. Role validation
     if (selectedRole == null) {
       _showSnackBar(
         'Please select a role to continue',
@@ -120,7 +117,6 @@ class _LoginState extends State<Login> with SingleTickerProviderStateMixin {
     final username = _usernameController.text.trim();
     final password = _passwordController.text.trim();
 
-    // 3. Username / Password Empty check
     if (username.isEmpty || password.isEmpty) {
       _showSnackBar(
         'Please enter your mobile/email and password',
@@ -129,7 +125,6 @@ class _LoginState extends State<Login> with SingleTickerProviderStateMixin {
       return;
     }
 
-    // 4. Format Validation
     if (!_isValidUsername(username)) {
       _showSnackBar(
         'Please enter a valid Gmail address or 10-digit mobile number',
@@ -138,7 +133,6 @@ class _LoginState extends State<Login> with SingleTickerProviderStateMixin {
       return;
     }
 
-    // 5. Password validation
     if (password.length < 6) {
       _showSnackBar(
         'Password must be at least 6 characters long',
@@ -147,7 +141,6 @@ class _LoginState extends State<Login> with SingleTickerProviderStateMixin {
       return;
     }
 
-    // Start loading
     setState(() {
       isLoading = true;
     });
@@ -168,10 +161,12 @@ class _LoginState extends State<Login> with SingleTickerProviderStateMixin {
       )
           .timeout(const Duration(seconds: 15));
 
+      // 🔍 Debug log raw response in case of HTML errors from Hostinger
+      debugPrint("API Response Status Code: ${response.statusCode}");
+      debugPrint("API Response Body: ${response.body}");
+
       final data = jsonDecode(response.body);
 
-      // Successful API response
-      // Successful API response
       if (response.statusCode == 200 && data['status'] == 'success') {
         final userData = data['user'];
 
@@ -181,14 +176,22 @@ class _LoginState extends State<Login> with SingleTickerProviderStateMixin {
         final String mobile = userData['mobile'] ?? '';
         final String actualRole = userData['role'] ?? '';
 
+        // Save session parameters for auto-login
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setBool('isLoggedIn', true);
+        await prefs.setString('username', username);
+        await prefs.setString('password', password);
+        await prefs.setString('role', actualRole);
+        await prefs.setString('emp_id', empId);
+        await prefs.setString('name', name);
+        await prefs.setString('email', email);
+        await prefs.setString('mobile', mobile);
+
         _showSnackBar('Login Successful!', Colors.green);
         await _requestAllPermissions();
 
         if (!mounted) return;
 
-        // ==============================
-        // ADMIN NAVIGATION
-        // ==============================
         if (actualRole == 'Admin') {
           Navigator.pushReplacement(
             context,
@@ -196,14 +199,7 @@ class _LoginState extends State<Login> with SingleTickerProviderStateMixin {
               builder: (context) => const AdminDashboard(),
             ),
           );
-          await _requestAllPermissions();
-        }
-
-        // ==============================
-// SALES STAFF NAVIGATION
-// Accepts both short-form (ASM/RSM/ZSM) and long-form role names
-// ==============================
-        else if (actualRole == 'Salesman' ||
+        } else if (actualRole == 'Salesman' ||
             actualRole == 'Sales Officer' ||
             actualRole == 'ASM' ||
             actualRole == 'RSM' ||
@@ -224,76 +220,40 @@ class _LoginState extends State<Login> with SingleTickerProviderStateMixin {
               ),
             ),
           );
-        }
-
-        // ==============================
-        // UNKNOWN ROLE
-        // ==============================
-        else {
+        } else {
           _showSnackBar(
             'Dashboard is not available for this role.',
             Colors.orange,
           );
         }
-      }
-
-      // ==============================
-      // LOGIN FAILED
-      // ==============================
-      else {
+      } else {
         _showSnackBar(
           data['message'] ?? 'Login failed',
           Colors.redAccent,
         );
       }
-    }
-
-    // ==============================
-    // TIMEOUT ERROR
-    // ==============================
-    on TimeoutException {
+    } on TimeoutException {
       _showSnackBar(
         'Connection timeout. Please check server connection.',
         Colors.redAccent,
       );
-    }
-
-    // ==============================
-    // SOCKET ERROR
-    // ==============================
-    on SocketException {
+    } on SocketException {
       _showSnackBar(
         'No internet connection or server unavailable.',
         Colors.redAccent,
       );
-    }
-
-    // ==============================
-    // JSON FORMAT ERROR
-    // ==============================
-    on FormatException {
+    } on FormatException {
       _showSnackBar(
-        'Invalid response format received from server.',
+        'Invalid response format received from server (Check hosting URL or PHP errors).',
         Colors.redAccent,
       );
-    }
-
-    // ==============================
-    // OTHER ERROR
-    // ==============================
-    catch (e) {
+    } catch (e) {
       _showSnackBar(
         'An unexpected error occurred. Please try again.',
         Colors.redAccent,
       );
-
       debugPrint('Login Error: $e');
-    }
-
-    // ==============================
-    // STOP LOADING
-    // ==============================
-    finally {
+    } finally {
       if (mounted) {
         setState(() {
           isLoading = false;
@@ -312,33 +272,25 @@ class _LoginState extends State<Login> with SingleTickerProviderStateMixin {
     );
   }
 
-  // ============================================================
-  // PERMISSION HANDLER — Location + Camera (called after login)
-  // ============================================================
   Future<void> _requestAllPermissions() async {
-    // Skip on Web (browser handles its own permission prompts)
     if (kIsWeb) return;
 
-    // ── STEP 1: Location Services ON? ──
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
       if (mounted) await _showLocationServiceDialog();
       serviceEnabled = await Geolocator.isLocationServiceEnabled();
     }
 
-    // ── STEP 2: Location Permission ──
     LocationPermission locPerm = await Geolocator.checkPermission();
     if (locPerm == LocationPermission.denied) {
       locPerm = await Geolocator.requestPermission();
     }
 
-    // ── STEP 3: Camera Permission ──
     PermissionStatus camStatus = await Permission.camera.status;
     if (camStatus.isDenied) {
       camStatus = await Permission.camera.request();
     }
 
-    // ── STEP 4: Re-check + show denied dialog if blocked ──
     final bool locOk = locPerm == LocationPermission.always ||
         locPerm == LocationPermission.whileInUse;
     final bool camOk = camStatus.isGranted;
@@ -614,19 +566,6 @@ class _LoginState extends State<Login> with SingleTickerProviderStateMixin {
                                     label: 'LOGIN',
                                     icon: Icons.login_rounded,
                                     onPressed: _handleLogin,
-                                  ),
-                                  const SizedBox(height: 18),
-                                  Row(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      Text(
-                                        'New User? ',
-                                        style: GoogleFonts.plusJakartaSans(
-                                          color: Colors.grey[700],
-                                          fontSize: 13,
-                                        ),
-                                      ),
-                                    ],
                                   ),
                                 ],
                               ),

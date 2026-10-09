@@ -9,7 +9,7 @@ import 'Log_In.dart';
 import 'Salesman_Dashboard.dart';
 
 // ✅ Use the SAME API endpoint as Log_In.dart so login + auto-login stay consistent
-const String API_URL = 'http://192.168.0.104/bhadra_foods/login.php';
+const String API_URL = 'https://gray-dragonfly-662322.hostingersite.com/bhadra_foods/login.php';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -130,8 +130,7 @@ class _MyHomePageState extends State<MyHomePage>
             await prefs.setString('password', savedPassword);
             await prefs.setBool('isLoggedIn', true);
 
-            // ✅ Route based on returned role — handles BOTH
-            //    long-form (Admin) and short-form (ASM/RSM/ZSM)
+            // ✅ Normalize role for robust checking (handles lowercase & trimming)
             final String normalizedRole = role.toLowerCase().trim();
 
             if (normalizedRole == 'admin') {
